@@ -1,0 +1,11 @@
+# HOKWord 运行依赖（Windows + Python 3.10+）
+# 安装：pip install -r requirements.txt
+# 注：rapidocr-onnxruntime 首次运行会自动下载 OCR 的 onnx 模型（约几十 MB）。
+PySide6>=6.6
+PySide6-Fluent-Widgets>=1.5
+mss>=9
+opencv-python>=4.10
+numpy>=2
+pywin32>=306
+pynput>=1.7
+rapidocr-onnxruntime>=1.3
