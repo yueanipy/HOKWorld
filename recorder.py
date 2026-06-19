@@ -1,15 +1,4 @@
-"""HOKWord 录制器 — 采集《王者荣耀世界》画面帧 + 输入,用于后续自动化开发。
-
-只读:绝不发送任何输入。点"开始"后,只在游戏窗口为**前台**时:
-  - 连续截图(mss)游戏客户区 -> sessions/<id>/frames/NNNNNN_<ms>.jpg
-  - 全局采集键鼠事件(pynput),含相对游戏客户区的归一化坐标 -> sessions/<id>/events.jsonl
-  - 帧索引 -> sessions/<id>/frames.jsonl,会话信息 -> meta.json
-游戏不在前台时(例如切到 VS Code / Alt-Tab 过程)自动不记录。
-帧与事件用同一个 perf_counter 时钟对齐,便于事后还原"某刻画面 + 当时操作"。
-
-用法:python recorder.py   (在游戏运行时启动,点开始/结束)
-依赖:PySide6 mss opencv-python numpy pywin32 pynput
-"""
+"""HOKWord 录制器 — 只读采集《王者荣耀世界》前台画面帧 + 键鼠事件,绝不发送输入。"""
 from __future__ import annotations
 
 import ctypes
@@ -46,6 +35,41 @@ def relaunch_as_admin() -> None:
     import os
     script = os.path.abspath(sys.argv[0])
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script}"', None, 1)
+
+
+# --------------------------- 分辨率 / DPI 适配 ---------------------------
+def set_dpi_awareness() -> None:
+    """声明进程 Per-Monitor-V2 DPI 感知,让 win32 客户区坐标与 mss 截屏在任意缩放下口径一致。
+    必须早于任何窗口/坐标/截屏调用。"""
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # Win10 1703+
+    except Exception:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Win8.1
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()    # 老系统兜底
+            except Exception:
+                pass
+
+
+# import 本模块即声明,确保早于 Qt/win32/mss
+set_dpi_awareness()
+
+
+def center_window(win) -> None:
+    """把窗口移到光标所在显示器可用区域正中。"""
+    try:
+        from PySide6.QtGui import QCursor, QGuiApplication
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        x = geo.x() + (geo.width() - win.width()) // 2
+        y = geo.y() + (geo.height() - win.height()) // 2
+        win.move(max(geo.x(), x), max(geo.y(), y))
+    except Exception:
+        pass
 
 
 # --------------------------- 游戏窗口工具 ---------------------------
@@ -325,6 +349,7 @@ def main() -> int:
     timer.timeout.connect(tick)
     timer.start(400)
 
+    center_window(win)          # 居中到当前显示器(任意分辨率/缩放)
     win.show()
     return app.exec()
 
