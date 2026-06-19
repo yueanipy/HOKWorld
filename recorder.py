@@ -29,12 +29,28 @@ def is_admin() -> bool:
         return False
 
 
+def _pythonw() -> str:
+    """pythonw.exe(无控制台);找不到则回退当前解释器。"""
+    import os
+    cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    return cand if os.path.exists(cand) else sys.executable
+
+
 def relaunch_as_admin() -> None:
-    # 以管理员重启"当前运行的入口脚本"。必须用 sys.argv[0],不能用 __file__——
-    # __file__ 恒为 recorder.py(本函数定义处),会导致 app.py 提权时误启动录制器。
+    # 以管理员重启入口脚本(用 sys.argv[0],不能用 __file__);pythonw.exe → 提权 GUI 不带控制台
     import os
     script = os.path.abspath(sys.argv[0])
-    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script}"', None, 1)
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", _pythonw(), f'"{script}"', None, 1)
+
+
+def hide_console() -> None:
+    """隐藏当前进程的控制台窗口(若有),只留 UI。"""
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)   # SW_HIDE
+    except Exception:
+        pass
 
 
 # --------------------------- 分辨率 / DPI 适配 ---------------------------
@@ -266,6 +282,7 @@ class Recorder:
 
 # --------------------------- GUI ---------------------------
 def main() -> int:
+    hide_console()              # 只显示 UI,隐藏控制台窗口
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (
         QApplication, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget,

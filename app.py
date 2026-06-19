@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 import sys
+
+# pythonw.exe(无控制台)下 sys.stdout/stderr 为 None,import 期打印(如 qfluentwidgets 横幅)会崩 → 兜个哑流
+if sys.stdout is None or sys.stderr is None:
+    import os
+    _null = open(os.devnull, "w")
+    sys.stdout = sys.stdout or _null
+    sys.stderr = sys.stderr or _null
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -19,7 +27,7 @@ sys.path.insert(0, str(HERE))
 
 APP_VERSION = "v1.0"   # 显示在顶部标题栏
 
-from recorder import center_window, is_admin, relaunch_as_admin  # noqa: E402
+from recorder import center_window, hide_console, is_admin, relaunch_as_admin  # noqa: E402
 
 try:
     from pynput import keyboard
@@ -382,6 +390,7 @@ def build_window() -> MainWindow:
 
 
 def main() -> int:
+    hide_console()              # 只显示 UI,隐藏控制台窗口
     # 默认以管理员启动:非管理员则提权重启自身
     if not is_admin():
         relaunch_as_admin()
