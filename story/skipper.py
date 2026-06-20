@@ -15,8 +15,10 @@ import win32con
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from recorder import client_rect_on_screen, find_game_hwnd, is_foreground  # noqa: E402
+from winenv import client_rect_on_screen, find_game_hwnd, is_foreground  # noqa: E402
 from story.recognizer import StoryRecognizer  # noqa: E402
+from config import cfg  # noqa: E402
+import applog  # noqa: E402
 
 
 class StorySkipper:
@@ -40,6 +42,8 @@ class StorySkipper:
         self.stop_flag = False
         self.paused = False
         self.skipped = 0
+        self.armed = cfg.inputs_armed()    # 真实输入是否开启;否则演练(只识别不发送)
+        self.jitter = cfg.timing_jitter()  # 光标位移微抖动(默认关闭)
 
     def stop(self) -> None:
         self.stop_flag = True
@@ -55,6 +59,8 @@ class StorySkipper:
         return np.asarray(shot)[:, :, :3]
 
     def _press_esc(self) -> None:
+        if not self.armed:
+            return
         win32api.keybd_event(self.VK_ESC, 0, 0, 0)
         time.sleep(0.05)
         win32api.keybd_event(self.VK_ESC, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -83,7 +89,7 @@ class StorySkipper:
             u = 1 - tt
             bx = u * u * sx + 2 * u * tt * cx + tt * tt * tx
             by = u * u * sy + 2 * u * tt * cy + tt * tt * ty
-            if i < steps:                        # 中途微抖动,最后一步不抖
+            if i < steps and self.jitter:        # 中途微抖动(可选,默认关闭)
                 bx += random.uniform(-1.5, 1.5)
                 by += random.uniform(-1.5, 1.5)
             win32api.SetCursorPos((int(bx), int(by)))
@@ -92,6 +98,8 @@ class StorySkipper:
 
     def _click_norm(self, hwnd, pt) -> None:
         """移动到归一化坐标处再点击(用于点确认框「跳过」按钮)。"""
+        if not self.armed:
+            return
         x, y, w, h = client_rect_on_screen(hwnd)
         self._move_to(int(x + pt[0] * w), int(y + pt[1] * h))
         time.sleep(random.uniform(0.03, 0.08))
@@ -101,12 +109,16 @@ class StorySkipper:
 
     def _click_here(self) -> None:
         """在当前光标位置原地点一下(不移动光标),用于对话/继续/黑屏推进。"""
+        if not self.armed:
+            return
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.04)
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def _nudge(self) -> None:
         """沿随机弧线平滑移到附近随机点(不瞬移、不点击),唤出会自动隐藏的剧情控制条。"""
+        if not self.armed:
+            return
         try:
             sx, sy = win32api.GetCursorPos()
         except Exception:
@@ -125,7 +137,7 @@ class StorySkipper:
             u = 1 - tt
             bx = u * u * sx + 2 * u * tt * cx + tt * tt * tx
             by = u * u * sy + 2 * u * tt * cy + tt * tt * ty
-            if i < steps:
+            if i < steps and self.jitter:
                 bx += random.uniform(-1.0, 1.0)
                 by += random.uniform(-1.0, 1.0)
             win32api.SetCursorPos((int(bx), int(by)))
@@ -139,6 +151,8 @@ class StorySkipper:
             self.log("未找到游戏窗口『王者荣耀世界』,请先运行游戏")
             return
         self.log("实时检测已启动(游戏态不动作;仅游戏前台;F12 急停)")
+        if not self.armed:
+            self.log("演练模式:真实输入未开启 → 只识别不发送键鼠(到「设置」开启「真实输入」后才会操作游戏)")
         dbg = self._open_debug()
 
         esc_pending = False        # 已按 ESC,等确认框
@@ -168,6 +182,8 @@ class StorySkipper:
                 state, pt = self.rec.classify(f)
                 if state != last_dbg:
                     self._dbg(dbg, now, state)
+                    if not self.armed:
+                        self.log(f"演练 · 识别状态:{self._state_cn(state)}(未发送输入)")
                     last_dbg = state
                 # ESC 后超时没等到确认框就放弃,并冷却一段
                 if esc_pending and now - esc_t > self.ESC_PENDING_S:
@@ -178,6 +194,10 @@ class StorySkipper:
                     last_play_t = now
                     esc_pending = False
                 recent_play = now - last_play_t < self.GAMEPLAY_STICK
+
+                if not self.armed:        # 演练模式:只识别不动作
+                    time.sleep(0.05)
+                    continue
 
                 if state == "confirm" and pt and now - last_skip > self.CONFIRM_GAP:
                     self._click_norm(hwnd, pt)
@@ -222,31 +242,24 @@ class StorySkipper:
         self._close_debug(dbg)
         self.log(f"实时检测结束,共跳过 {self.skipped} 段")
 
+    _STATE_CN = {
+        "play": "游戏世界", "confirm": "可跳过确认框", "interact": "交互框(宝箱等)",
+        "skip": "可跳过剧情", "dialogue": "对话推进", "continue": "点击空白处继续",
+        "black": "黑屏过场", "immersive": "沉浸式剧情",
+    }
+
+    def _state_cn(self, state: str) -> str:
+        return self._STATE_CN.get(state, state)
+
     def _open_debug(self):
-        try:
-            d = HERE.parent / "sessions"
-            d.mkdir(parents=True, exist_ok=True)
-            fp = open(d / "_story_debug.log", "a", encoding="utf-8")
-            fp.write(f"\n==== run {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
-            fp.flush()
-            return fp
-        except Exception:
-            return None
+        applog.debug("story: run start")
+        return True
 
     def _dbg(self, fp, now, state) -> None:
-        if fp is None:
-            return
-        try:
-            fp.write(f"{time.strftime('%H:%M:%S')}  {state}\n")
-            fp.flush()
-        except Exception:
-            pass
+        applog.debug(f"story state -> {self._state_cn(state)}")
 
     def _close_debug(self, fp) -> None:
-        try:
-            fp and fp.close()
-        except Exception:
-            pass
+        applog.debug("story: run end")
 
 
 if __name__ == "__main__":

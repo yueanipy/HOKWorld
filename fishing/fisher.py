@@ -15,10 +15,10 @@ import win32con
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from recorder import client_rect_on_screen, find_game_hwnd, is_foreground  # noqa: E402
+from winenv import client_rect_on_screen, find_game_hwnd, is_foreground  # noqa: E402
 from fishing.matcher import CLICK_POINT, FishingRecognizer  # noqa: E402
-
-SCREENSHOT_DIR = HERE.parents[1] / "屏幕截图"
+from paths import is_dev, screenshots_dir, sessions_dir  # noqa: E402
+from config import cfg  # noqa: E402
 
 _CAST_REASON = {
     "too_close": "落点过近", "too_far": "超出落杆范围",
@@ -33,7 +33,8 @@ class FishingBot:
         self.on_count = on_count
         self.stop_flag = False
         self.caught = 0
-        self.debug = debug          # 调试期抓帧到 sessions/_debug/
+        self.armed = cfg.inputs_armed()   # 真实输入是否开启;否则演练(只识别不发送)
+        self.debug = bool(debug) and is_dev()  # 仅开发模式抓调试帧
         self._dbgdir = None
         self._last_qdbg = 0.0
         self.cast_pt = list(CLICK_POINT)  # 落杆点(按过近/过远提示动态调整)
@@ -51,6 +52,8 @@ class FishingBot:
             pass
 
     def _press_f(self) -> None:
+        if not self.armed:
+            return
         win32api.keybd_event(0x46, 0, 0, 0)   # F:放入背包/确认
         time.sleep(0.05)
         win32api.keybd_event(0x46, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -71,7 +74,7 @@ class FishingBot:
 
     def _press_key(self, k: str) -> None:
         vk = self._VK.get(k.upper())
-        if not vk:
+        if not vk or not self.armed:
             return
         win32api.keybd_event(vk, 0, 0, 0)
         time.sleep(0.02)
@@ -80,7 +83,7 @@ class FishingBot:
     def _tap(self, k: str) -> None:
         """大鱼 QTE 快速点按。"""
         vk = self._VK.get(k.upper())
-        if not vk:
+        if not vk or not self.armed:
             return
         win32api.keybd_event(vk, 0, 0, 0)
         time.sleep(self.TAP_DOWN_S)
@@ -89,6 +92,8 @@ class FishingBot:
 
     def _release_all(self) -> None:
         """退出时把方向键全部抬起,防漏发抬键卡键。"""
+        if not self.armed:
+            return
         for k in ("A", "D", "W", "S"):
             try:
                 win32api.keybd_event(self._VK[k], 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -117,6 +122,8 @@ class FishingBot:
         return np.asarray(shot)[:, :, :3]
 
     def _click(self, hwnd, pt=None) -> None:
+        if not self.armed:
+            return
         pt = pt if pt is not None else self.cast_pt
         x, y, w, h = client_rect_on_screen(hwnd)
         sx, sy = int(x + pt[0] * w), int(y + pt[1] * h)
@@ -127,6 +134,8 @@ class FishingBot:
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def _esc(self) -> None:
+        if not self.armed:
+            return
         win32api.keybd_event(0x1B, 0, 0, 0)
         time.sleep(0.05)
         win32api.keybd_event(0x1B, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -169,7 +178,9 @@ class FishingBot:
         return st, f, sc
 
     def _save_debug(self, frame, tag, scores=None) -> None:
-        d = HERE.parent / "sessions" / "_debug"
+        if not is_dev():
+            return
+        d = sessions_dir() / "_debug"
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{tag}_{time.strftime('%H%M%S')}.png"
         cv2.imwrite(str(p), frame)
@@ -232,8 +243,10 @@ class FishingBot:
         return "timeout"
 
     def _save_success(self, frame) -> None:
-        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        name = SCREENSHOT_DIR / f"钓鱼成功_{time.strftime('%Y%m%d_%H%M%S')}_{self.caught + 1}.png"
+        if not is_dev():
+            return
+        d = screenshots_dir()
+        name = d / f"钓鱼成功_{time.strftime('%Y%m%d_%H%M%S')}_{self.caught + 1}.png"
         cv2.imwrite(str(name), frame)
         self.log(f"成功图已存: 屏幕截图/{name.name}")
 
@@ -294,8 +307,10 @@ class FishingBot:
         if not hwnd:
             self.log("未找到游戏窗口『王者荣耀世界』,请先运行游戏")
             return
+        if not self.armed:
+            self.log("演练模式:真实输入未开启 → 只识别不发送键鼠(到「设置」开启「真实输入」后才会操作游戏)")
         if self.debug:
-            self._dbgdir = HERE.parent / "sessions" / "_debug" / f"run_{time.strftime('%H%M%S')}"
+            self._dbgdir = sessions_dir() / "_debug" / f"run_{time.strftime('%H%M%S')}"
             self._dbgdir.mkdir(parents=True, exist_ok=True)
             self.log(f"调试抓帧 → sessions/_debug/{self._dbgdir.name}")
         self.log(f"开始钓鱼,目标 {count} 条")
@@ -317,6 +332,7 @@ class FishingBot:
         end_streak = 0          # 连续多帧回到普通钓鱼按钮 = 本鱼结束
         qframe = 0              # 拉杆后帧计数(节流记录界面检测)
         last_cast = 0.0
+        last_dry_log = 0.0      # 演练模式日志限频
         last_progress = time.time()
         IDLE_STOP_S = 60.0      # 持续无可识别钓鱼状态则停
         t_start = time.time()
@@ -340,6 +356,16 @@ class FishingBot:
                 f = self._grab(sct, hwnd)
                 if f is None:
                     time.sleep(0.03)
+                    continue
+
+                # 演练模式:只识别不发送,任何动作分支都不进入
+                if not self.armed:
+                    st, _ = self.rec.classify(f)
+                    now = time.time()
+                    if now - last_dry_log > 1.5:
+                        self.log(f"演练 · 识别状态:{st}(未发送输入)")
+                        last_dry_log = now
+                    time.sleep(0.2)
                     continue
 
                 # 1) 上钩(最高优先,时间敏感)

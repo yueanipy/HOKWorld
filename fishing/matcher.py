@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import cv2
@@ -11,6 +12,11 @@ from .template_bank import (
     DEFAULT_SCALES, FAST_SCALES, TemplateBank, crop as _crop, match_scales,
     normalize, pp_gray,
 )
+
+HERE = Path(__file__).resolve().parent
+if str(HERE.parent) not in sys.path:
+    sys.path.insert(0, str(HERE.parent))
+from paths import resource_path  # noqa: E402
 
 # 渔获数量:×1 / x1 / *1 等
 _QTY_RE = re.compile(r"[x×X*]\s*[0-9]")
@@ -26,8 +32,7 @@ def _get_ocr():
     return _OCR
 
 
-HERE = Path(__file__).resolve().parent
-TPL = HERE / "templates" / "raw"
+TPL = resource_path("fishing", "templates", "raw")   # 冻结后指向 PyInstaller 解包目录
 
 # 归一化坐标 (x0, y0, x1, y1)
 ROI_BUTTON = (0.90, 0.85, 0.978, 0.97)   # 右下角按钮簇
