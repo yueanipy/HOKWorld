@@ -351,7 +351,7 @@ class UpdateCheckWorker(QThread):
 
 
 class UpdateDownloadWorker(QThread):
-    """后台下载安装器 + SHA-256 校验,可取消。"""
+    """后台下载安装器(发布附 .sha256 时才做 SHA-256 校验),可取消。"""
     sig_progress = Signal(int, int)   # done, total(bytes)
     sig_done = Signal(str)            # 本地安装器路径
     sig_error = Signal(str)
@@ -367,16 +367,13 @@ class UpdateDownloadWorker(QThread):
 
     def run(self) -> None:
         try:
-            sha = updater.fetch_sha256(self.info)
-            if not sha:
-                self.sig_error.emit("未找到 SHA-256 校验文件,已取消(为安全起见不安装未校验的包)")
-                return
             name = self.info.installer_name or f"HOKWorldScript-{self.info.version}-Setup.exe"
             dest = updates_dir() / name
             updater.download(self.info.installer_url, dest,
                              progress=lambda d, t: self.sig_progress.emit(d, t),
                              cancel=self._cancel)
-            if not updater.verify_sha256(dest, sha):
+            sha = updater.fetch_sha256(self.info)   # 发布附了 .sha256 才校验,否则跳过
+            if sha and not updater.verify_sha256(dest, sha):
                 try:
                     os.remove(dest)
                 except OSError:
@@ -637,9 +634,9 @@ class SettingsInterface(QWidget):
 
     def _on_download_done(self, path: str) -> None:
         self.progress_widget.hide()
-        applog.log(f"更新已下载并通过校验:{path}")
+        applog.log(f"更新已下载:{path}")
         box = MessageBox("下载完成",
-                         "安装器已下载并通过 SHA-256 校验。\n现在关闭程序并运行安装器升级?\n"
+                         "安装器已下载完成。\n现在关闭程序并运行安装器升级?\n"
                          "(用户配置与日志保存在 %LOCALAPPDATA%\\HOKWorldScript,升级不会丢失)",
                          self.window())
         box.yesButton.setText("立即安装并退出")
