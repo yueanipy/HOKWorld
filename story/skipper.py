@@ -28,6 +28,9 @@ class StorySkipper:
     ABORT_BLOCK = 2.5            # 放弃后这么久内不按 ESC
     GAMEPLAY_STICK = 1.2         # 见到游戏态后这么久内都当游戏态(跨过边界抖动)
     MOVE_TIME = (0.3, 0.8)       # 光标移动用时
+    NUDGE_DIST = (28, 56)        # 沉浸式唤条:每次随机微动的距离(像素,仅开关开启时)
+    NUDGE_TIME = (0.12, 0.28)    # 微动的平滑用时(分多步移动,不瞬移、不闪)
+    NUDGE_INTERVAL = (0.8, 1.2)  # 两次微动的随机间隔(秒)
     VK_ESC = 0x1B
 
     def __init__(self, log=print, on_count=lambda n: None) -> None:
@@ -102,6 +105,32 @@ class StorySkipper:
         time.sleep(0.04)
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
+    def _nudge(self) -> None:
+        """沿随机弧线平滑移到附近随机点(不瞬移、不点击),唤出会自动隐藏的剧情控制条。"""
+        try:
+            sx, sy = win32api.GetCursorPos()
+        except Exception:
+            return
+        ang = random.uniform(0, 2 * math.pi)
+        dist = random.uniform(*self.NUDGE_DIST)
+        tx, ty = sx + dist * math.cos(ang), sy + dist * math.sin(ang)
+        px, py = -math.sin(ang), math.cos(ang)
+        off = random.uniform(-0.35, 0.35) * dist
+        cx, cy = (sx + tx) / 2 + px * off, (sy + ty) / 2 + py * off
+        dur = random.uniform(*self.NUDGE_TIME)
+        steps = max(5, int(dur / 0.012))
+        for i in range(1, steps + 1):
+            t = i / steps
+            tt = t * t * (3 - 2 * t)
+            u = 1 - tt
+            bx = u * u * sx + 2 * u * tt * cx + tt * tt * tx
+            by = u * u * sy + 2 * u * tt * cy + tt * tt * ty
+            if i < steps:
+                bx += random.uniform(-1.0, 1.0)
+                by += random.uniform(-1.0, 1.0)
+            win32api.SetCursorPos((int(bx), int(by)))
+            time.sleep(dur / steps)
+
     def run(self, nudge: bool = False) -> None:
         self.stop_flag = False
         self.skipped = 0
@@ -118,6 +147,7 @@ class StorySkipper:
         block_esc_until = 0.0      # 此刻前不按 ESC
         last_play_t = -99.0        # 上次见到游戏态
         next_advance = 0.0
+        next_nudge = 0.0           # 沉浸式微动:下次允许微动的时刻
         last_ocr = 0.0
         last_dbg = ""
         last_advance_log = ""
@@ -177,6 +207,17 @@ class StorySkipper:
                                       "black": "黑屏过场 → 点击推进"}[state])
                             last_advance_log = state
 
+                elif nudge and state == "immersive":
+                    # 可选(界面开关):仅沉浸式剧情才微动唤出控制条,唤出后由上面 ESC/点击接管。
+                    # 只移动不点击;游戏态已被 recent_play 先拦截,不会触发。
+                    if now >= next_nudge:
+                        self._nudge()
+                        next_nudge = now + random.uniform(*self.NUDGE_INTERVAL)
+                        if last_advance_log != "nudge":
+                            self.log("沉浸式剧情 → 鼠标微动唤出控制条")
+                            last_advance_log = "nudge"
+
+                # 'interact' / 'immersive'(未开微动):不动作
                 time.sleep(0.05)
         self._close_debug(dbg)
         self.log(f"实时检测结束,共跳过 {self.skipped} 段")

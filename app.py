@@ -1,4 +1,4 @@
-"""HOKWord 控制台 — Fluent 界面。默认以管理员启动(发真实输入需要),全局 F12 急停。"""
+"""HOKWorld 控制台 — Fluent 界面。默认以管理员启动(发真实输入需要),全局 F12 急停。"""
 from __future__ import annotations
 
 import sys
@@ -13,6 +13,7 @@ if sys.stdout is None or sys.stderr is None:
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -25,7 +26,7 @@ from qfluentwidgets import (
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-APP_VERSION = "v1.0"   # 显示在顶部标题栏
+APP_VERSION = "v1.0"
 
 from recorder import center_window, hide_console, is_admin, relaunch_as_admin  # noqa: E402
 
@@ -33,6 +34,14 @@ try:
     from pynput import keyboard
 except Exception:
     keyboard = None
+
+ASSETS = HERE / "assets"
+
+
+def _nav_icon(name, fallback):
+    """assets/ 下有同名 png 就用,否则回退内置图标。"""
+    p = ASSETS / name
+    return QIcon(str(p)) if p.exists() else fallback
 
 
 class FishWorker(QThread):
@@ -47,7 +56,7 @@ class FishWorker(QThread):
         self.bot = None
 
     def run(self) -> None:
-        # 热重载钓鱼代码:改逻辑后点「开始」即生效,无需重启控制台
+        # 热重载钓鱼代码:改逻辑后点开始即生效,无需重启控制台
         import importlib
         import recorder
         import fishing.matcher
@@ -128,12 +137,12 @@ class FishingInterface(QWidget):
         self.card.addWidget(self.start_btn)
         self.card.addWidget(self.stop_btn)
 
-        self.count_spin = SpinBox()           # 下拉项 1:循环次数
+        self.count_spin = SpinBox()
         self.count_spin.setRange(0, 9999)
         self.count_spin.setValue(0)
         self.count_spin.setFixedWidth(150)
         self.card.addGroup(FIF.SYNC, "循环次数", "目标钓鱼条数(0 = 只钓一次,达到后自动停止)", self.count_spin)
-        self.exit_switch = SwitchButton()     # 下拉项 2:完成后退出
+        self.exit_switch = SwitchButton()
         self.card.addGroup(FIF.POWER_BUTTON, "完成后退出", "完成任务后退出游戏 App", self.exit_switch)
         root.addWidget(self.card)
 
@@ -155,7 +164,6 @@ class FishingInterface(QWidget):
         self.start_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
 
-    # ---- 自动钓鱼 ----
     def _start(self) -> None:
         if self._worker:
             return
@@ -183,7 +191,6 @@ class FishingInterface(QWidget):
         self.stop_btn.setEnabled(False)
         self._set_card_content(self.card, self._CARD_DESC)
 
-    # ---- 公共 ----
     def _warn_admin(self) -> None:
         if not is_admin():
             InfoBar.warning("需要管理员", "请以管理员重启后再开始(游戏提权)。",
@@ -196,12 +203,12 @@ class FishingInterface(QWidget):
 
     def _set_card_content(self, card, text: str) -> None:
         try:
-            card.card.setContent(text)        # 更新卡片副标题(运行态/空闲态)
+            card.card.setContent(text)
         except Exception:
             pass
 
     def _append(self, msg: str) -> None:
-        self._last_msg = msg                  # 只保留最新一条
+        self._last_msg = msg
         self._refresh_status()
 
     def _refresh_status(self) -> None:
@@ -215,7 +222,7 @@ class FishingInterface(QWidget):
 
 class RealtimeInterface(QWidget):
     """实时检测页:开始/暂停/停止实时读屏,无剧情时不动作,仅进入需触发状态时才处理。"""
-    _DESC = "实时读屏,只在进入「可跳过剧情 / 信息面板」等需触发状态时才动作;无剧情时不做任何操作"
+    _DESC = "实时读屏,只在进入「可跳过剧情」等需触发状态时才动作;无剧情时不做任何操作"
 
     def __init__(self) -> None:
         super().__init__()
@@ -238,8 +245,8 @@ class RealtimeInterface(QWidget):
         self.card.addWidget(self.pause_btn)
         self.card.addWidget(self.stop_btn)
         self.nudge_switch = SwitchButton()
-        self.card.addGroup(FIF.ROBOT, "鼠标微动唤出控制条",
-                           "剧情控制条若会自动隐藏则开启(每秒极小幅移动鼠标唤出)", self.nudge_switch)
+        self.card.addGroup(FIF.ROBOT, "鼠标微动唤出控制条（不稳定）",
+                           "剧情控制条若会自动隐藏则开启(沉浸式剧情里平滑微动鼠标唤出)", self.nudge_switch)
         root.addWidget(self.card)
 
         self.status_card = CardWidget()
@@ -330,7 +337,7 @@ class AboutInterface(QWidget):
         lo = QVBoxLayout(self)
         lo.setContentsMargins(28, 22, 28, 22)
         lo.addWidget(TitleLabel("关于"))
-        lo.addWidget(BodyLabel("HOKWord — 《王者荣耀世界》黑盒视觉自动化"))
+        lo.addWidget(BodyLabel("HOKWorld — 《王者荣耀世界》黑盒视觉自动化"))
         lo.addWidget(CaptionLabel("仅黑盒视觉 + 标准键鼠;不读内存/不注入/不改封包。"))
         lo.addStretch(1)
 
@@ -338,10 +345,11 @@ class AboutInterface(QWidget):
 class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
-        # 顶部标题栏:图标 + 名称 + 版本
-        self.setWindowTitle(f"HOKWord  {APP_VERSION}  ·  王者荣耀世界")
+        # 顶部标题栏:名称 + 版本。标题栏左侧不放图标,标题文字左移补到图标原位
+        self.setWindowTitle(f"HOKWorld  {APP_VERSION}  ·  王者荣耀世界")
+        self.setWindowIcon(_nav_icon("app.png", QIcon()))   # 任务栏/exe 图标
         try:
-            self.setWindowIcon(FIF.GAME.icon())
+            self.titleBar.iconLabel.hide()                   # 标题栏不显示图标,标题随之左移补位
         except Exception:
             pass
         self.resize(1180, 720)
@@ -349,23 +357,18 @@ class MainWindow(FluentWindow):
         self.realtime = RealtimeInterface()
         self.fishing = FishingInterface()
         self.about = AboutInterface()
-        self.addSubInterface(self.realtime, FIF.VIDEO, "实时检测")   # 第一个
-        self.addSubInterface(self.fishing, FIF.GAME, "独立任务")
+        self.addSubInterface(self.realtime, _nav_icon("realtime.png", FIF.VIDEO), "实时检测")
+        self.addSubInterface(self.fishing, _nav_icon("task.png", FIF.GAME), "独立任务")
         self.addSubInterface(self.about, FIF.INFO, "关于", NavigationItemPosition.BOTTOM)
 
-        # 左侧菜单栏:固定展开、不自动收起
+        # 左侧菜单栏:默认展开;窗口缩放不自动变化;点汉堡(三线)才手动折叠成仅图标
         self.navigationInterface.setExpandWidth(170)
-        self.navigationInterface.setMinimumExpandWidth(0)
-        self.navigationInterface.setCollapsible(False)
-        # 顶部保留汉堡按钮占一格,使菜单项下移;禁用其折叠点击 → 始终展开
-        self.navigationInterface.setMenuButtonVisible(True)
+        self.navigationInterface.setMinimumExpandWidth(0)   # 窗口变窄也不自动折叠
+        self.navigationInterface.setCollapsible(True)        # 允许汉堡手动折叠到仅图标
+        self.navigationInterface.setMenuButtonVisible(True)  # 汉堡可见 → 变宽也不自动展开,手动状态保持
         self.navigationInterface.setReturnButtonVisible(False)
         try:
-            self.navigationInterface.panel.menuButton.clicked.disconnect()
-        except Exception:
-            pass
-        try:
-            self.navigationInterface.expand(useAni=False)   # 启动即展开到 170
+            self.navigationInterface.expand(useAni=False)
         except Exception:
             pass
 
@@ -384,7 +387,7 @@ class MainWindow(FluentWindow):
 
 
 def build_window() -> MainWindow:
-    setTheme(Theme.LIGHT)        # 白色客户端
+    setTheme(Theme.LIGHT)
     setThemeColor("#2dd4a8")
     return MainWindow()
 
@@ -399,7 +402,7 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication(sys.argv)
     win = build_window()
-    center_window(win)          # 居中到当前显示器(任意分辨率/缩放),不再启动在右下角
+    center_window(win)          # 居中到当前显示器(任意分辨率/缩放)
     win.show()
     return app.exec()
 
