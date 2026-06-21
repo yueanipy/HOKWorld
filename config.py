@@ -15,8 +15,6 @@ DEFAULTS = {
     "dry_run": True,                 # 演练模式:只识别、不发送输入
     "real_input": False,             # 真实输入总开关(默认关闭)
     "timing_jitter": False,          # 时序/位移随机抖动(默认关闭)
-    "check_update_on_startup": True, # 启动时检查更新
-    "skip_version": "",              # 用户选择「跳过」的版本号
 }
 
 

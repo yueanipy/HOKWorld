@@ -12,27 +12,23 @@ if sys.stdout is None or sys.stderr is None:
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, CardWidget, ExpandGroupSettingCard, FluentIcon as FIF,
-    FluentWindow, HyperlinkButton, IconWidget, InfoBar, InfoBarPosition, MessageBox,
-    NavigationItemPosition, PrimaryPushButton, ProgressBar, PushButton, SpinBox,
+    FluentWindow, HyperlinkButton, IconWidget, InfoBar, InfoBarPosition,
+    NavigationItemPosition, PrimaryPushButton, PushButton, SpinBox,
     StrongBodyLabel, SwitchButton, TitleLabel, setTheme, setThemeColor, Theme,
 )
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import os         # noqa: E402
-import threading  # noqa: E402
-
 import applog  # noqa: E402
-import updater  # noqa: E402
 from config import cfg  # noqa: E402
-from paths import resource_path, updates_dir  # noqa: E402
+from paths import resource_path  # noqa: E402
 from version import APP_DISPLAY, GITHUB_OWNER, GITHUB_REPO, __version__  # noqa: E402
 from winenv import center_window, hide_console, is_admin, relaunch_as_admin  # noqa: E402
 
@@ -338,65 +334,12 @@ class RealtimeInterface(QWidget):
             self._append("F12 急停")
 
 
-class UpdateCheckWorker(QThread):
-    """后台查最新 Release(不阻塞 UI)。"""
-    sig_result = Signal(object)   # ReleaseInfo
-    sig_error = Signal(str)
-
-    def run(self) -> None:
-        try:
-            self.sig_result.emit(updater.fetch_latest())
-        except Exception as exc:
-            self.sig_error.emit(f"{type(exc).__name__}: {exc}")
-
-
-class UpdateDownloadWorker(QThread):
-    """后台下载安装器(发布附 .sha256 时才做 SHA-256 校验),可取消。"""
-    sig_progress = Signal(int, int)   # done, total(bytes)
-    sig_done = Signal(str)            # 本地安装器路径
-    sig_error = Signal(str)
-    sig_cancel = Signal()
-
-    def __init__(self, info) -> None:
-        super().__init__()
-        self.info = info
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
-
-    def run(self) -> None:
-        try:
-            name = self.info.installer_name or f"HOKWorldScript-{self.info.version}-Setup.exe"
-            dest = updates_dir() / name
-            updater.download(self.info.installer_url, dest,
-                             progress=lambda d, t: self.sig_progress.emit(d, t),
-                             cancel=self._cancel)
-            sha = updater.fetch_sha256(self.info)   # 发布附了 .sha256 才校验,否则跳过
-            if sha and not updater.verify_sha256(dest, sha):
-                try:
-                    os.remove(dest)
-                except OSError:
-                    pass
-                self.sig_error.emit("SHA-256 校验失败,已删除下载文件(继续使用当前版本)")
-                return
-            self.sig_done.emit(str(dest))
-        except updater.CancelledError:
-            self.sig_cancel.emit()
-        except Exception as exc:
-            self.sig_error.emit(f"下载失败:{type(exc).__name__}: {exc}")
-
-
 class SettingsInterface(QWidget):
-    """设置:安全(演练 / 真实输入 / 时序抖动)+ 在线更新(检查 / 下载 / 校验 / 跳过)。"""
+    """设置:安全门控(演练 / 真实输入 / 时序抖动)。"""
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("settingsInterface")
-        self._check_worker: UpdateCheckWorker | None = None
-        self._dl_worker: UpdateDownloadWorker | None = None
-        self._pending = None        # 待安装的 ReleaseInfo
-        self._manual = False        # 本次检查是否手动触发(手动才弹提示)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -423,69 +366,6 @@ class SettingsInterface(QWidget):
         root.addWidget(sec)
         self._refresh_safety()
 
-        # —— 在线更新 ——
-        upd = CardWidget()
-        uv = QVBoxLayout(upd)
-        uv.setContentsMargins(18, 14, 18, 14)
-        uv.setSpacing(8)
-        uv.addWidget(StrongBodyLabel("在线更新"))
-
-        top = QHBoxLayout()
-        top.addWidget(BodyLabel(f"当前版本 {APP_VERSION}"))
-        top.addStretch(1)
-        top.addWidget(HyperlinkButton(
-            f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}", "项目主页"))
-        uv.addLayout(top)
-
-        self.startup_sw = self._switch_row(
-            uv, "启动时检查更新", "每次启动后台静默检查新版本",
-            "check_update_on_startup",
-            lambda on: cfg.set("check_update_on_startup", bool(on)))
-
-        self.update_status = CaptionLabel("")
-        uv.addWidget(self.update_status)
-
-        self.notes_label = BodyLabel("")
-        self.notes_label.setWordWrap(True)
-        self.notes_label.hide()
-        uv.addWidget(self.notes_label)
-
-        btn_row = QHBoxLayout()
-        self.check_btn = PushButton(FIF.SYNC, "检查更新")
-        self.check_btn.clicked.connect(lambda: self.check_update(manual=True))
-        btn_row.addWidget(self.check_btn)
-        btn_row.addStretch(1)
-        uv.addLayout(btn_row)
-
-        # 发现新版本后才显示:立即更新 / 跳过此版本
-        self.action_widget = QWidget()
-        aw = QHBoxLayout(self.action_widget)
-        aw.setContentsMargins(0, 0, 0, 0)
-        self.update_btn = PrimaryPushButton(FIF.DOWNLOAD, "立即更新")
-        self.update_btn.clicked.connect(self._start_download)
-        self.skip_btn = PushButton("跳过此版本")
-        self.skip_btn.clicked.connect(self._skip_version)
-        aw.addWidget(self.update_btn)
-        aw.addWidget(self.skip_btn)
-        aw.addStretch(1)
-        self.action_widget.hide()
-        uv.addWidget(self.action_widget)
-
-        # 下载中才显示:进度条 + 取消
-        self.progress_widget = QWidget()
-        pw = QHBoxLayout(self.progress_widget)
-        pw.setContentsMargins(0, 0, 0, 0)
-        self.progress = ProgressBar()
-        self.progress_label = CaptionLabel("")
-        self.cancel_btn = PushButton("取消")
-        self.cancel_btn.clicked.connect(self._cancel_download)
-        pw.addWidget(self.progress, 1)
-        pw.addWidget(self.progress_label)
-        pw.addWidget(self.cancel_btn)
-        self.progress_widget.hide()
-        uv.addWidget(self.progress_widget)
-
-        root.addWidget(upd)
         root.addStretch(1)
 
     # ---- 安全 ----
@@ -519,152 +399,6 @@ class SettingsInterface(QWidget):
         self.safety_state.setText(
             "当前:真实输入已启用(下次「开始」起会操作游戏)" if armed
             else "当前:演练模式(只识别,不发送任何输入);需同时『真实输入开 + 演练模式关』才会操作游戏")
-
-    # ---- 更新 ----
-    def _set_update_status(self, text: str) -> None:
-        self.update_status.setText(text)
-
-    def check_update(self, manual: bool) -> None:
-        if self._check_worker or self._dl_worker:
-            return
-        self._manual = manual
-        self.check_btn.setEnabled(False)
-        if manual:
-            self._set_update_status("正在检查更新…")
-        self._check_worker = UpdateCheckWorker()
-        self._check_worker.sig_result.connect(self._on_check_result)
-        self._check_worker.sig_error.connect(self._on_check_error)
-        self._check_worker.finished.connect(self._check_done)
-        self._check_worker.start()
-
-    def _check_done(self) -> None:
-        self._check_worker = None
-        self.check_btn.setEnabled(True)
-
-    def _on_check_error(self, msg: str) -> None:
-        applog.log(f"更新检查失败:{msg}")
-        if not self._manual:
-            return
-        if "404" in msg:
-            InfoBar.info("暂无发布版本", "GitHub 上还没有正式 Release。",
-                         duration=4000, position=InfoBarPosition.TOP, parent=self)
-        else:
-            InfoBar.warning("检查更新失败", msg, duration=5000,
-                            position=InfoBarPosition.TOP, parent=self)
-        self._set_update_status("检查更新失败")
-
-    def _on_check_result(self, info) -> None:
-        if not info.version or not updater.is_newer(info.version):
-            applog.log(f"已是最新版本 {APP_VERSION}(最新 {info.version or '?'})")
-            self._set_update_status(f"已是最新版本 {APP_VERSION}")
-            if self._manual:
-                InfoBar.success("已是最新", f"当前 {APP_VERSION} 已是最新版本。",
-                                duration=4000, position=InfoBarPosition.TOP, parent=self)
-            return
-        if not info.has_installer:
-            applog.log(f"发现 v{info.version} 但无安装包资源")
-            if self._manual:
-                InfoBar.warning("无可用安装包", f"v{info.version} 未附带安装器。",
-                                duration=5000, position=InfoBarPosition.TOP, parent=self)
-            return
-        if (not self._manual) and info.version == (cfg.get("skip_version") or ""):
-            applog.log(f"发现新版本 v{info.version},但已被用户跳过")
-            return
-        self._present_update(info)
-
-    def _present_update(self, info) -> None:
-        self._pending = info
-        notes = (info.notes or "").strip() or "(无更新说明)"
-        if len(notes) > 800:
-            notes = notes[:800] + " …"
-        self.notes_label.setText(f"发现新版本 v{info.version}\n\n{notes}")
-        self.notes_label.show()
-        self.action_widget.show()
-        self.progress_widget.hide()
-        self._set_update_status(f"发现新版本 v{info.version}")
-        applog.log(f"发现新版本 v{info.version}")
-
-    def _start_download(self) -> None:
-        if not self._pending or self._dl_worker:
-            return
-        self.action_widget.hide()
-        self.progress.setValue(0)
-        self.progress_label.setText("")
-        self.progress_widget.show()
-        self._set_update_status("正在下载更新…")
-        applog.log(f"开始下载更新 v{self._pending.version}")
-        self._dl_worker = UpdateDownloadWorker(self._pending)
-        self._dl_worker.sig_progress.connect(self._on_progress)
-        self._dl_worker.sig_done.connect(self._on_download_done)
-        self._dl_worker.sig_error.connect(self._on_download_error)
-        self._dl_worker.sig_cancel.connect(self._on_download_cancel)
-        self._dl_worker.finished.connect(self._dl_done)
-        self._dl_worker.start()
-
-    def _dl_done(self) -> None:
-        self._dl_worker = None
-
-    def _on_progress(self, done: int, total: int) -> None:
-        mb = 1024 * 1024
-        if total > 0:
-            pct = int(done * 100 / total)
-            self.progress.setValue(pct)
-            self.progress_label.setText(f"{done // mb}/{total // mb} MB ({pct}%)")
-        else:
-            self.progress_label.setText(f"{done // mb} MB")
-
-    def _cancel_download(self) -> None:
-        if self._dl_worker:
-            self._dl_worker.cancel()
-            self._set_update_status("正在取消下载…")
-
-    def _on_download_cancel(self) -> None:
-        self.progress_widget.hide()
-        self.action_widget.show()
-        self._set_update_status("已取消下载(继续使用当前版本)")
-        applog.log("用户取消了更新下载")
-
-    def _on_download_error(self, msg: str) -> None:
-        self.progress_widget.hide()
-        self.action_widget.show()
-        self._set_update_status(msg)
-        applog.log(f"更新失败:{msg}")
-        InfoBar.warning("更新失败", msg, duration=6000,
-                        position=InfoBarPosition.TOP, parent=self)
-
-    def _on_download_done(self, path: str) -> None:
-        self.progress_widget.hide()
-        applog.log(f"更新已下载:{path}")
-        box = MessageBox("下载完成",
-                         "安装器已下载完成。\n现在关闭程序并运行安装器升级?\n"
-                         "(用户配置与日志保存在 %LOCALAPPDATA%\\HOKWorldScript,升级不会丢失)",
-                         self.window())
-        box.yesButton.setText("立即安装并退出")
-        box.cancelButton.setText("稍后")
-        if box.exec():
-            if updater.launch_installer(path):
-                applog.log("已启动安装器,程序退出以便覆盖升级")
-                QApplication.quit()
-            else:
-                applog.log("安装器启动失败")
-                InfoBar.error("启动失败", f"安装器无法启动,请手动运行:\n{path}",
-                              duration=8000, position=InfoBarPosition.TOP, parent=self)
-                self.action_widget.show()
-        else:
-            self.action_widget.show()
-            self._set_update_status(f"安装包已就绪:{path}")
-
-    def _skip_version(self) -> None:
-        if not self._pending:
-            return
-        v = self._pending.version
-        cfg.set("skip_version", v)
-        applog.log(f"已跳过版本 v{v}")
-        self.notes_label.hide()
-        self.action_widget.hide()
-        self._set_update_status(f"已跳过 v{v}(不再自动提示)")
-        InfoBar.info("已跳过", f"将不再自动提示 v{v}。", duration=4000,
-                     position=InfoBarPosition.TOP, parent=self)
 
 
 class AboutInterface(QWidget):
@@ -720,9 +454,6 @@ class MainWindow(FluentWindow):
             self._hotkey = keyboard.Listener(on_press=self._on_key)
             self._hotkey.start()
 
-        # 启动时静默检查更新(可在「设置」关闭)
-        if cfg.get("check_update_on_startup"):
-            QTimer.singleShot(1500, lambda: self.settings.check_update(manual=False))
 
     def _on_key(self, key) -> None:
         try:

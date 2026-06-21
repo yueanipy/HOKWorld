@@ -60,10 +60,6 @@ def cache_dir() -> Path:
     return _sub("cache")
 
 
-def updates_dir() -> Path:
-    return _sub("updates")
-
-
 def sessions_dir() -> Path:
     return _sub("sessions")
 
