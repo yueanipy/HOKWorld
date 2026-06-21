@@ -12,8 +12,8 @@
 ## 跑起来
 
 ```bat
-git clone git@github.com:yueanipy/HOKWorldScript.git
-cd HOKWorldScript
+git clone git@github.com:yueanipy/HOKWorld.git
+cd HOKWorld
 python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
