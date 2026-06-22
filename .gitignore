@@ -5,7 +5,8 @@ __pycache__/
 .venv/
 venv/
 
-# 运行期产物(调试帧 / 日志 / 成功截图;运行时写入 %LOCALAPPDATA%\HOKWorldScript)
+# 本机运行数据(配置 / 采集名单 / 日志 / 调试帧 / 成功截图;运行时写入程序目录下 data\)
+data/
 sessions/
 屏幕截图/
 logs/

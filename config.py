@@ -1,7 +1,7 @@
-"""用户配置:JSON 存于 %LOCALAPPDATA%\\HOKWorldScript\\config.json。
+"""用户配置:JSON 存于 %LOCALAPPDATA%\\HOKWorldScript\\config.json(覆盖更新 / 换机更新都保留)。
 
-默认安全配置:演练模式开启、真实输入关闭、时序抖动关闭——
-首次运行只识别不发送任何键鼠,需在「设置」里显式开启「真实输入」后才会操作游戏。
+目前仅「时序抖动」。不再有「演练 / 真实输入」总开关——它们会**静默关掉游戏操作**(识别到却不按),
+易被误当作脚本失灵;现在脚本一律真实操作。采集黑/白名单同样存用户目录,更新不丢。
 """
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from pathlib import Path
 from paths import config_path
 
 DEFAULTS = {
-    "dry_run": True,                 # 演练模式:只识别、不发送输入
-    "real_input": False,             # 真实输入总开关(默认关闭)
     "timing_jitter": False,          # 时序/位移随机抖动(默认关闭)
 }
 
@@ -51,11 +49,6 @@ class Config:
         self._d[key] = value
         if save:
             self.save()
-
-    # ---- 语义助手 ----
-    def inputs_armed(self) -> bool:
-        """是否允许真实发送键鼠:真实输入开 且 演练模式关。"""
-        return bool(self._d.get("real_input")) and not bool(self._d.get("dry_run"))
 
     def timing_jitter(self) -> bool:
         return bool(self._d.get("timing_jitter"))

@@ -18,9 +18,10 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, CardWidget, ExpandGroupSettingCard, FluentIcon as FIF,
-    FluentWindow, HyperlinkButton, IconWidget, InfoBar, InfoBarPosition,
-    NavigationItemPosition, PrimaryPushButton, PushButton, SpinBox,
-    StrongBodyLabel, SwitchButton, TitleLabel, setTheme, setThemeColor, Theme,
+    FluentWindow, HyperlinkButton, IconWidget, InfoBar, InfoBarPosition, MessageBoxBase,
+    NavigationItemPosition, PrimaryPushButton, PushButton, PushSettingCard, SettingCard,
+    SpinBox, SubtitleLabel, SwitchButton, SwitchSettingCard, TextEdit, TitleLabel,
+    setTheme, setThemeColor, Theme,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -30,7 +31,7 @@ import applog  # noqa: E402
 from config import cfg  # noqa: E402
 from paths import resource_path  # noqa: E402
 from version import APP_DISPLAY, GITHUB_OWNER, GITHUB_REPO, __version__  # noqa: E402
-from winenv import center_window, hide_console, is_admin, relaunch_as_admin  # noqa: E402
+from winenv import center_window, hide_console, is_admin, relaunch_as_admin, set_app_id  # noqa: E402
 
 APP_VERSION = f"v{__version__}"
 
@@ -108,6 +109,43 @@ class StoryWorker(QThread):
         self.bot = StorySkipper(log=self.sig_log.emit, on_count=self.sig_count.emit)
         try:
             self.bot.run(nudge=self._nudge)
+        except Exception as exc:
+            self.sig_log.emit(f"[错误] {type(exc).__name__}: {exc}")
+        self.sig_done.emit()
+
+    def stop(self) -> None:
+        if self.bot:
+            self.bot.stop()
+
+    def set_paused(self, on: bool) -> None:
+        if self.bot:
+            self.bot.set_paused(on)
+
+
+class GatherWorker(QThread):
+    """实时自动采集线程(热重载 gather 代码)。"""
+    sig_log = Signal(str)
+    sig_count = Signal(int)
+    sig_done = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bot = None
+
+    def run(self) -> None:
+        import importlib
+        import winenv
+        import gather.recognizer
+        import gather.picker
+        for m in (winenv, gather.recognizer, gather.picker):
+            try:
+                importlib.reload(m)
+            except Exception:
+                pass
+        from gather.picker import GatherPicker
+        self.bot = GatherPicker(log=self.sig_log.emit, on_count=self.sig_count.emit)
+        try:
+            self.bot.run()
         except Exception as exc:
             self.sig_log.emit(f"[错误] {type(exc).__name__}: {exc}")
         self.sig_done.emit()
@@ -225,13 +263,15 @@ class FishingInterface(QWidget):
 
 
 class RealtimeInterface(QWidget):
-    """实时检测页:开始/暂停/停止实时读屏,无剧情时不动作,仅进入需触发状态时才处理。"""
-    _DESC = "实时读屏,只在进入「可跳过剧情」等需触发状态时才动作;无剧情时不做任何操作"
+    """实时检测页:点开始后实时读屏,自动识别跳过剧情;可选「经过材料自动采集」一起跑。
+    无触发状态时不做任何操作。"""
+    _DESC = "点开始后实时读屏:自动识别跳过剧情;可选开「经过材料自动采集」一起跑。无触发状态时不动作"
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("realtimeInterface")
         self._worker: StoryWorker | None = None
+        self._gather: GatherWorker | None = None
         self._paused = False
         self._last_msg = ""
 
@@ -239,7 +279,7 @@ class RealtimeInterface(QWidget):
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(14)
 
-        self.card = ExpandGroupSettingCard(FIF.VIDEO, "剧情跳过(实时检测)", self._DESC, self)
+        self.card = ExpandGroupSettingCard(FIF.VIDEO, "实时检测(剧情跳过 + 自动采集)", self._DESC, self)
         self.start_btn = PrimaryPushButton(FIF.PLAY, "开始")
         self.pause_btn = PushButton(FIF.PAUSE, "暂停")
         self.stop_btn = PushButton(FIF.CLOSE, "停止")
@@ -251,6 +291,12 @@ class RealtimeInterface(QWidget):
         self.nudge_switch = SwitchButton()
         self.card.addGroup(FIF.ROBOT, "鼠标微动唤出控制条（不稳定）",
                            "剧情控制条若会自动隐藏则开启(沉浸式剧情里平滑微动鼠标唤出)", self.nudge_switch)
+        self.gather_switch = SwitchButton()
+        self.gather_switch.setChecked(True)          # 默认开启:点开始即跳剧情 + 自动采集
+        self.card.addGroup(FIF.SYNC, "经过材料自动采集(F)",
+                           "默认开启;与剧情跳过一起跑:经过材料/宝箱/重现自动按 F(按图标识别;NPC/商店/对话/组队不动)。"
+                           "误采的交互可在「设置 · 采集碰撞名单」里加一行排除",
+                           self.gather_switch)
         root.addWidget(self.card)
 
         self.status_card = CardWidget()
@@ -288,12 +334,20 @@ class RealtimeInterface(QWidget):
         self.stop_btn.setEnabled(True)
         self._set_content("运行中…")
         self._worker.start()
+        if self.gather_switch.isChecked():
+            self._gather = GatherWorker()
+            self._gather.sig_log.connect(self._append)
+            self._gather.sig_count.connect(lambda n: self._append(f"已采集 {n} 个材料"))
+            self._gather.sig_done.connect(self._on_gather_done)
+            self._gather.start()
 
     def _toggle_pause(self) -> None:
         if not self._worker:
             return
         self._paused = not self._paused
         self._worker.set_paused(self._paused)
+        if self._gather:
+            self._gather.set_paused(self._paused)
         self.pause_btn.setText("继续" if self._paused else "暂停")
         self._append("已暂停实时检测" if self._paused else "已继续实时检测")
         self._set_content("已暂停" if self._paused else "运行中…")
@@ -302,11 +356,26 @@ class RealtimeInterface(QWidget):
         if self._worker:
             self._append("停止中…")
             self._worker.stop()
+        if self._gather:
+            self._gather.stop()
 
     def _on_done(self) -> None:
         if self._worker:
             self._worker.wait(1500)
             self._worker = None
+        if self._gather:                  # 剧情线程结束 → 采集线程一并收尾
+            self._gather.stop()
+        self._maybe_reset_ui()
+
+    def _on_gather_done(self) -> None:
+        if self._gather:
+            self._gather.wait(1500)
+            self._gather = None
+        self._maybe_reset_ui()
+
+    def _maybe_reset_ui(self) -> None:
+        if self._worker or self._gather:   # 两个线程都结束才复位按钮
+            return
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("暂停")
@@ -329,13 +398,47 @@ class RealtimeInterface(QWidget):
         self.status.setText(msg)
 
     def emergency_stop(self) -> None:
+        stopped = False
         if self._worker:
             self._worker.stop()
+            stopped = True
+        if self._gather:
+            self._gather.stop()
+            stopped = True
+        if stopped:
             self._append("F12 急停")
 
 
+class ListEditDialog(MessageBoxBase):
+    """点开才出现的名单编辑弹窗(编辑一个 .txt:一行一个,# 注释)。白名单/碰撞名单共用。"""
+
+    def __init__(self, file, title, tip, placeholder, parent=None) -> None:
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel(title, self)
+        cap = CaptionLabel(tip, self)
+        cap.setWordWrap(True)
+        self.edit = TextEdit(self)
+        self.edit.setPlaceholderText(placeholder)
+        self.edit.setFixedSize(460, 300)
+        try:
+            self.edit.setPlainText(file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(cap)
+        self.viewLayout.addWidget(self.edit)
+        self.yesButton.setText("保存")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(520)
+
+    def text(self) -> str:
+        return self.edit.toPlainText()
+
+
 class SettingsInterface(QWidget):
-    """设置:安全门控(演练 / 真实输入 / 时序抖动)。"""
+    """设置(简洁卡片版):采集白名单(强制采)/ 碰撞名单(跳过)点开才编辑;时序抖动;运行状态。
+    名单编辑的是「用户数据目录」里的文件(随更新/换机保留),不是安装目录的模板。
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -343,62 +446,81 @@ class SettingsInterface(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.setSpacing(14)
+        root.setSpacing(12)
         root.addWidget(TitleLabel("设置"))
 
-        # —— 安全 ——
-        sec = CardWidget()
-        sv = QVBoxLayout(sec)
-        sv.setContentsMargins(18, 14, 18, 14)
-        sv.setSpacing(8)
-        sv.addWidget(StrongBodyLabel("安全"))
-        self.dry_sw = self._switch_row(
-            sv, "演练模式", "只识别不发送任何键鼠(推荐先用此模式确认识别正常)",
-            "dry_run", self._on_dry)
-        self.real_sw = self._switch_row(
-            sv, "真实输入", "允许向游戏发送键鼠;请在合法授权下使用,后果自负",
-            "real_input", self._on_real)
-        self.jitter_sw = self._switch_row(
-            sv, "时序抖动", "光标移动时添加细微随机抖动(默认关闭)",
-            "timing_jitter", lambda on: cfg.set("timing_jitter", bool(on)))
-        self.safety_state = CaptionLabel("")
-        sv.addWidget(self.safety_state)
-        root.addWidget(sec)
-        self._refresh_safety()
+        # 采集白名单 —— 强制采(优先级最高);点开才编辑
+        self.whitelist_card = PushSettingCard(
+            "编辑名单", FIF.ADD, "采集白名单(强制采)",
+            "写在这里的识别到就一定采(盖过碰撞名单);也能强制采图标不是手型的东西")
+        self.whitelist_card.clicked.connect(self._edit_whitelist)
+        root.addWidget(self.whitelist_card)
+
+        # 采集碰撞名单 —— 跳过;点开才编辑
+        self.blacklist_card = PushSettingCard(
+            "编辑名单", FIF.BROOM, "采集碰撞名单(跳过)",
+            "不想自动采的(如渡石/滑索/冲云翼),点开编辑;采集时会跳过名单里的提示")
+        self.blacklist_card.clicked.connect(self._edit_blacklist)
+        root.addWidget(self.blacklist_card)
+
+        # 时序抖动 —— 开关
+        self.jitter_card = SwitchSettingCard(
+            FIF.ROBOT, "时序抖动", "光标移动时添加细微随机手颤,更拟人(默认关闭)")
+        self.jitter_card.setChecked(bool(cfg.get("timing_jitter")))
+        self.jitter_card.checkedChanged.connect(lambda on: cfg.set("timing_jitter", bool(on)))
+        root.addWidget(self.jitter_card)
+
+        # 运行状态 —— 管理员 + 急停;非管理员时右侧给「以管理员重启」
+        if is_admin():
+            self.status_card = SettingCard(
+                FIF.UPDATE, "运行状态", "管理员运行:是 · 可向游戏发送键鼠 · 急停热键 F12")
+        else:
+            self.status_card = PushSettingCard(
+                "以管理员重启", FIF.UPDATE, "运行状态",
+                "管理员运行:否 · 合成键鼠会被拦截(识别到却按不动) · 急停热键 F12")
+            self.status_card.clicked.connect(self._relaunch_admin)
+        root.addWidget(self.status_card)
 
         root.addStretch(1)
 
-    # ---- 安全 ----
-    def _switch_row(self, parent, title, desc, key, on_toggle):
-        row = QHBoxLayout()
-        col = QVBoxLayout()
-        col.setSpacing(1)
-        col.addWidget(BodyLabel(title))
-        col.addWidget(CaptionLabel(desc))
-        sw = SwitchButton()
-        sw.setChecked(bool(cfg.get(key)))
-        sw.checkedChanged.connect(on_toggle)
-        row.addLayout(col, 1)
-        row.addWidget(sw, 0, Qt.AlignVCenter)
-        parent.addLayout(row)
-        return sw
+    # ---- 名单编辑(点开;编辑的是用户数据目录里的文件)----
+    def _edit_whitelist(self) -> None:
+        from gather.recognizer import whitelist_file
+        self._edit_list(
+            whitelist_file(), "采集白名单(强制采)",
+            "写「一定要采的」——一行一个,识别到就一定采(优先级最高,能盖过碰撞名单;# 开头是说明)。",
+            "一行一个,例如:\n某稀有材料\n某宝箱", "白名单")
 
-    def _on_dry(self, on: bool) -> None:
-        cfg.set("dry_run", bool(on))
-        self._refresh_safety()
+    def _edit_blacklist(self) -> None:
+        from gather.recognizer import blacklist_file
+        self._edit_list(
+            blacklist_file(), "采集碰撞名单(跳过)",
+            "填「额外想跳过的」——一行一个(渡石/滑索/冲云翼等已内置);提示里出现这些字就跳过。",
+            "一行一个,例如:\n某不想采的交互", "碰撞名单")
 
-    def _on_real(self, on: bool) -> None:
-        cfg.set("real_input", bool(on))
-        if on and not cfg.get("dry_run"):
-            InfoBar.warning("真实输入已启用", "下次「开始」起会真实操作游戏,请确认在合法授权下使用。",
-                            duration=5000, position=InfoBarPosition.TOP, parent=self)
-        self._refresh_safety()
+    def _edit_list(self, file, title, tip, placeholder, label) -> None:
+        dlg = ListEditDialog(file, title, tip, placeholder, self.window())
+        if not dlg.exec():
+            return
+        text = dlg.text()
+        try:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(text, encoding="utf-8")
+        except Exception as e:
+            InfoBar.error("保存失败", str(e), duration=4000,
+                          position=InfoBarPosition.TOP, parent=self)
+            return
+        n = len([ln for ln in text.splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")])
+        InfoBar.success("已保存", f"{label}已写入({n} 条),下次「开始」采集时生效。",
+                        duration=3000, position=InfoBarPosition.TOP, parent=self)
 
-    def _refresh_safety(self) -> None:
-        armed = cfg.inputs_armed()
-        self.safety_state.setText(
-            "当前:真实输入已启用(下次「开始」起会操作游戏)" if armed
-            else "当前:演练模式(只识别,不发送任何输入);需同时『真实输入开 + 演练模式关』才会操作游戏")
+    def _relaunch_admin(self) -> None:
+        try:
+            relaunch_as_admin()
+        except Exception as e:
+            InfoBar.error("无法提权重启", str(e), duration=4000,
+                          position=InfoBarPosition.TOP, parent=self)
 
 
 class AboutInterface(QWidget):
@@ -411,7 +533,7 @@ class AboutInterface(QWidget):
         lo.addWidget(BodyLabel(f"{APP_DISPLAY}  ·  {APP_VERSION}"))
         lo.addWidget(BodyLabel("HOKWorld — 《王者荣耀世界》黑盒视觉自动化"))
         lo.addWidget(CaptionLabel("仅黑盒视觉 + 标准键鼠;不读内存/不注入/不改封包。"))
-        lo.addWidget(CaptionLabel("用户配置 / 日志 / 更新包保存在 %LOCALAPPDATA%\\HOKWorldScript。"))
+        lo.addWidget(CaptionLabel("配置 / 日志 / 采集名单存在程序目录下的 data\\(随程序、不进 Windows 用户目录)。"))
         lo.addWidget(HyperlinkButton(
             f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}", "项目主页 / 反馈问题"))
         lo.addStretch(1)
@@ -476,9 +598,11 @@ def main() -> int:
     if not is_admin():
         relaunch_as_admin()
         return 0
+    set_app_id()                # 任务栏/Alt+Tab 用本程序图标(app.png)而非 python 宿主图标
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setWindowIcon(_nav_icon("app.png", QIcon()))   # 任务栏/Alt+Tab/标题栏统一用 app.png
     win = build_window()
     center_window(win)          # 居中到当前显示器(任意分辨率/缩放)
     win.show()
