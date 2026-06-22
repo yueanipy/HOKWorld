@@ -1,16 +1,14 @@
 """运行环境路径:区分「随程序分发的只读资源」与「用户可写数据」。
 
 - 资源(钓鱼模板、图标、Qt 插件等)随程序走:冻结后在 PyInstaller 解包目录,源码下在项目目录。
-- 用户数据(配置 / 日志 / 缓存 / 更新包 / 调试帧 / 成功截图)一律写
-  %LOCALAPPDATA%\\HOKWorldScript;安装目录保持只读,卸载或覆盖升级都不动用户数据。
+- 本机数据(配置 / 日志 / 缓存 / 采集名单 / 调试帧 / 成功截图)写**程序同级的 data\\**
+  (随程序、不进 Windows 用户目录;本程序不区分用户角色)。覆盖升级保留,卸载随 {app}\\data 清。
 """
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
-
-from version import USER_DATA_NAME
 
 
 def is_frozen() -> bool:
@@ -38,10 +36,14 @@ def resource_path(*parts: str) -> Path:
 
 
 def user_data_dir() -> Path:
-    """%LOCALAPPDATA%\\HOKWorldScript;无该环境变量时回退到用户目录。"""
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-    root = Path(base) if base else (Path.home() / "AppData" / "Local")
-    d = root / USER_DATA_NAME
+    """本机数据目录:**随程序**走(打包后 = exe 同级的 data\\;源码 = 项目根 data\\),
+    不放进 Windows 用户目录(本程序不区分用户角色)。覆盖升级保留(不在安装器 [Files] 内),
+    卸载随 {app}\\data 一并清。配置 / 日志 / 缓存 / 采集名单都在这。"""
+    if is_frozen():
+        base = Path(sys.executable).resolve().parent   # 安装目录(exe 同级)
+    else:
+        base = Path(__file__).resolve().parent          # 源码项目根
+    d = base / "data"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

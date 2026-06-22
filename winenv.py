@@ -46,6 +46,15 @@ def hide_console() -> None:
         pass
 
 
+def set_app_id(app_id: str = "yueanipy.HOKWorld") -> None:
+    """设置进程 AppUserModelID:让任务栏/Alt+Tab 用窗口图标(app.png)而非 python 宿主图标。
+    必须在创建任何窗口前调用;打包成 exe 后系统一般已用 exe 图标,设置它无害。"""
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
 def set_dpi_awareness() -> None:
     """声明 Per-Monitor-V2 DPI 感知,使 win32 客户区坐标与 mss 截屏在任意缩放下口径一致。
     必须早于任何窗口/坐标/截屏调用。"""

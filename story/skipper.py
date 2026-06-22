@@ -42,7 +42,6 @@ class StorySkipper:
         self.stop_flag = False
         self.paused = False
         self.skipped = 0
-        self.armed = cfg.inputs_armed()    # 真实输入是否开启;否则演练(只识别不发送)
         self.jitter = cfg.timing_jitter()  # 光标位移微抖动(默认关闭)
 
     def stop(self) -> None:
@@ -59,8 +58,6 @@ class StorySkipper:
         return np.asarray(shot)[:, :, :3]
 
     def _press_esc(self) -> None:
-        if not self.armed:
-            return
         win32api.keybd_event(self.VK_ESC, 0, 0, 0)
         time.sleep(0.05)
         win32api.keybd_event(self.VK_ESC, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -98,8 +95,6 @@ class StorySkipper:
 
     def _click_norm(self, hwnd, pt) -> None:
         """移动到归一化坐标处再点击(用于点确认框「跳过」按钮)。"""
-        if not self.armed:
-            return
         x, y, w, h = client_rect_on_screen(hwnd)
         self._move_to(int(x + pt[0] * w), int(y + pt[1] * h))
         time.sleep(random.uniform(0.03, 0.08))
@@ -109,16 +104,12 @@ class StorySkipper:
 
     def _click_here(self) -> None:
         """在当前光标位置原地点一下(不移动光标),用于对话/继续/黑屏推进。"""
-        if not self.armed:
-            return
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.04)
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def _nudge(self) -> None:
         """沿随机弧线平滑移到附近随机点(不瞬移、不点击),唤出会自动隐藏的剧情控制条。"""
-        if not self.armed:
-            return
         try:
             sx, sy = win32api.GetCursorPos()
         except Exception:
@@ -151,8 +142,6 @@ class StorySkipper:
             self.log("未找到游戏窗口『王者荣耀世界』,请先运行游戏")
             return
         self.log("实时检测已启动(游戏态不动作;仅游戏前台;F12 急停)")
-        if not self.armed:
-            self.log("演练模式:真实输入未开启 → 只识别不发送键鼠(到「设置」开启「真实输入」后才会操作游戏)")
         dbg = self._open_debug()
 
         esc_pending = False        # 已按 ESC,等确认框
@@ -182,8 +171,6 @@ class StorySkipper:
                 state, pt = self.rec.classify(f)
                 if state != last_dbg:
                     self._dbg(dbg, now, state)
-                    if not self.armed:
-                        self.log(f"演练 · 识别状态:{self._state_cn(state)}(未发送输入)")
                     last_dbg = state
                 # ESC 后超时没等到确认框就放弃,并冷却一段
                 if esc_pending and now - esc_t > self.ESC_PENDING_S:
@@ -194,10 +181,6 @@ class StorySkipper:
                     last_play_t = now
                     esc_pending = False
                 recent_play = now - last_play_t < self.GAMEPLAY_STICK
-
-                if not self.armed:        # 演练模式:只识别不动作
-                    time.sleep(0.05)
-                    continue
 
                 if state == "confirm" and pt and now - last_skip > self.CONFIRM_GAP:
                     self._click_norm(hwnd, pt)
