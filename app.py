@@ -98,9 +98,10 @@ class StoryWorker(QThread):
     def run(self) -> None:
         import importlib
         import winenv
+        import capture
         import story.recognizer
         import story.skipper
-        for m in (winenv, story.recognizer, story.skipper):
+        for m in (winenv, capture, story.recognizer, story.skipper):
             try:
                 importlib.reload(m)
             except Exception:
@@ -135,9 +136,10 @@ class GatherWorker(QThread):
     def run(self) -> None:
         import importlib
         import winenv
+        import capture
         import gather.recognizer
         import gather.picker
-        for m in (winenv, gather.recognizer, gather.picker):
+        for m in (winenv, capture, gather.recognizer, gather.picker):
             try:
                 importlib.reload(m)
             except Exception:
@@ -326,7 +328,6 @@ class RealtimeInterface(QWidget):
         self._show_status("实时检测启动中…(无剧情不动作;游戏需前台;F12 急停)")
         self._worker = StoryWorker(self.nudge_switch.isChecked())
         self._worker.sig_log.connect(self._append)
-        self._worker.sig_count.connect(lambda n: self._set_content(f"运行中 · 已跳过 {n}"))
         self._worker.sig_done.connect(self._on_done)
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
