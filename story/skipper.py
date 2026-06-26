@@ -1,38 +1,49 @@
-"""HOKWord 实时剧情跳过引擎(状态 → 动作)。"""
+"""HOKWord 实时剧情跳过引擎 v3(配合 recognizer v2 正向门 + 两步识别)。
+
+识别交给 StoryRecognizer:classify(纯模板,快)给粗状态;门内非可跳过时本文件**限频**调
+read_options(OCR)查选项。本文件只做"状态 → 动作"。
+
+**三条核心保证(都来自用户实测反馈)**:
+  1) 只在 positively 在剧情(右上 [F9]抓拍 门成立)或确认框时才动鼠标 → 切活动/日常面板等菜单一律
+     idle,**光标纹丝不动**(不再有任何"黑屏点击 / 鼠标微动"在非剧情时移动光标)。
+  2) **剧情结束 / 段间黑屏立即停手**:黑屏/过场/回到游戏都判 idle 不动作 → 杜绝"过完剧情误点=攻击"。
+     停手后每帧用 F9 门快速重判:进入下一段剧情就继续,回到游戏就一直不动。
+  3) **不可跳过对话快速连点推进**:story 态下按很短固定间隔点中性点连推(无随机延迟),选项检查用 OCR
+     但**限频**(每 OPT_CHECK 秒一次),故连点不被 OCR 拖慢;可跳过段优先 ESC(最快)。
+
+点击一律**直接移动到目标 + 立即点一下**(不走随机弧线、不抖动、不拖延 → 无闪烁)。中性点固定,连点
+不再移动光标。复用 recorder 的窗口/前台/截图;仅游戏前台时动作;F12 全局急停。
+"""
 from __future__ import annotations
 
-import math
 import random
 import sys
 import time
 from pathlib import Path
 
-import mss
-import numpy as np
-import win32api
-import win32con
-
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from winenv import client_rect_on_screen, find_game_hwnd, is_foreground  # noqa: E402
+from winenv import find_game_hwnd, is_foreground  # noqa: E402
+from capture import GameCapture  # noqa: E402
 from story.recognizer import StoryRecognizer  # noqa: E402
 from config import cfg  # noqa: E402
-import applog  # noqa: E402
+from runtime_guard import dev_log, release_known_keys, safe_click_norm, safe_press_key  # noqa: E402
+
+NEUTRAL_PT = (0.5, 0.92)       # 推进点击点 = 对话框底部居中的「继续」指示符(向下箭头︶/三个点)位置:
+                               # 看真实帧(sessions/.../000500 箭头、000510 三点)——点这里才会"立即进入下一句";
+                               # 箭头在=点了就翻页,三点(配音中)=点了无效但无害 → 快速连点≈以游戏允许的最快速度推进
 
 
 class StorySkipper:
-    OCR_INTERVAL = 0.45            # 限频识别
-    ADVANCE_INTERVAL = (0.6, 1.0)  # 对话/继续/黑屏 推进点击间隔
-    CONFIRM_GAP = 0.8             # 两次点确认框最小间隔
-    ESC_PENDING_S = 1.3          # 按 ESC 后等确认框的最长时间
-    POST_SKIP_BLOCK = 2.0        # 跳过后这么久内不按 ESC
-    ABORT_BLOCK = 2.5            # 放弃后这么久内不按 ESC
-    GAMEPLAY_STICK = 1.2         # 见到游戏态后这么久内都当游戏态(跨过边界抖动)
-    MOVE_TIME = (0.3, 0.8)       # 光标移动用时
-    NUDGE_DIST = (28, 56)        # 沉浸式唤条:每次随机微动的距离(像素,仅开关开启时)
-    NUDGE_TIME = (0.12, 0.28)    # 微动的平滑用时(分多步移动,不瞬移、不闪)
-    NUDGE_INTERVAL = (0.8, 1.2)  # 两次微动的随机间隔(秒)
+    TICK = 0.04             # 主循环 tick(classify 纯模板很快,可高频)
+    CLICK_DELAY = (0.1, 0.3)  # 每次鼠标点击的随机延迟(秒);兼作 story 连点的随机间隔(拟人,不固定)
+    CONFIRM_GAP = 0.8       # 两次点确认框「跳过」最小间隔
+    OPT_CHECK = 0.3         # story 态 OCR(控制条「跳过」兜底 + 选项)的限频间隔
+    SKIP_HOLD = 1.0         # 见到"可跳过"信号后这么久内只走 ESC、绝不点击推进(修复"跳过条已出却还点两三下")
+    ESC_PENDING_S = 1.3     # 按 ESC 后等确认框最长时间;超时未见 → 放弃
+    POST_SKIP_BLOCK = 1.2   # 成功跳过后这么久内不按 ESC(跨过淡出残留)
+    ABORT_BLOCK = 2.0       # 「ESC 无确认框」放弃后这么久内不按 ESC
     VK_ESC = 0x1B
 
     def __init__(self, log=print, on_count=lambda n: None) -> None:
@@ -42,208 +53,178 @@ class StorySkipper:
         self.stop_flag = False
         self.paused = False
         self.skipped = 0
-        self.jitter = cfg.timing_jitter()  # 光标位移微抖动(默认关闭)
+        self._hwnd = None
 
     def stop(self) -> None:
         self.stop_flag = True
+        release_known_keys(self.log)
 
     def set_paused(self, on: bool) -> None:
         self.paused = on
 
-    def _grab(self, sct, hwnd):
-        x, y, w, h = client_rect_on_screen(hwnd)
-        if w <= 0 or h <= 0:
-            return None
-        shot = sct.grab({"left": x, "top": y, "width": w, "height": h})
-        return np.asarray(shot)[:, :, :3]
-
-    def _press_esc(self) -> None:
-        win32api.keybd_event(self.VK_ESC, 0, 0, 0)
-        time.sleep(0.05)
-        win32api.keybd_event(self.VK_ESC, 0, win32con.KEYEVENTF_KEYUP, 0)
-
-    def _move_to(self, tx: int, ty: int) -> None:
-        """光标沿随机弧线平滑移动到 (tx,ty),不瞬移。"""
-        try:
-            sx, sy = win32api.GetCursorPos()
-        except Exception:
-            sx, sy = tx, ty
-        dx, dy = tx - sx, ty - sy
-        dist = math.hypot(dx, dy)
-        if dist < 2:
-            win32api.SetCursorPos((tx, ty))
-            return
-        # 控制点 = 中点 + 垂直方向随机偏移,形成不同的弧
-        px, py = -dy / dist, dx / dist
-        off = random.uniform(-0.25, 0.25) * dist
-        cx = (sx + tx) / 2 + px * off + random.uniform(-0.08, 0.08) * dist
-        cy = (sy + ty) / 2 + py * off + random.uniform(-0.08, 0.08) * dist
-        dur = random.uniform(*self.MOVE_TIME)
-        steps = max(6, int(dur / 0.012))
-        for i in range(1, steps + 1):
-            t = i / steps
-            tt = t * t * (3 - 2 * t)             # smoothstep 缓动
-            u = 1 - tt
-            bx = u * u * sx + 2 * u * tt * cx + tt * tt * tx
-            by = u * u * sy + 2 * u * tt * cy + tt * tt * ty
-            if i < steps and self.jitter:        # 中途微抖动(可选,默认关闭)
-                bx += random.uniform(-1.5, 1.5)
-                by += random.uniform(-1.5, 1.5)
-            win32api.SetCursorPos((int(bx), int(by)))
-            time.sleep(dur / steps)
-        win32api.SetCursorPos((tx, ty))
+    def _press_esc(self) -> bool:
+        return safe_press_key(self.VK_ESC, self._stopped, self._foreground, self.log, 0.05)
 
     def _click_norm(self, hwnd, pt) -> None:
-        """移动到归一化坐标处再点击(用于点确认框「跳过」按钮)。"""
-        x, y, w, h = client_rect_on_screen(hwnd)
-        self._move_to(int(x + pt[0] * w), int(y + pt[1] * h))
-        time.sleep(random.uniform(0.03, 0.08))
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(random.uniform(0.03, 0.06))
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        """点客户区归一化坐标:**直接定位 + 立即点击**(不走弧线/不抖动 → 无闪烁、不拖延)。"""
+        safe_click_norm(hwnd, pt, self._stopped, self._foreground, self.log, 0.02)
 
-    def _click_here(self) -> None:
-        """在当前光标位置原地点一下(不移动光标),用于对话/继续/黑屏推进。"""
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.04)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    def _stopped(self) -> bool:
+        return bool(self.stop_flag)
 
-    def _nudge(self) -> None:
-        """沿随机弧线平滑移到附近随机点(不瞬移、不点击),唤出会自动隐藏的剧情控制条。"""
-        try:
-            sx, sy = win32api.GetCursorPos()
-        except Exception:
-            return
-        ang = random.uniform(0, 2 * math.pi)
-        dist = random.uniform(*self.NUDGE_DIST)
-        tx, ty = sx + dist * math.cos(ang), sy + dist * math.sin(ang)
-        px, py = -math.sin(ang), math.cos(ang)
-        off = random.uniform(-0.35, 0.35) * dist
-        cx, cy = (sx + tx) / 2 + px * off, (sy + ty) / 2 + py * off
-        dur = random.uniform(*self.NUDGE_TIME)
-        steps = max(5, int(dur / 0.012))
-        for i in range(1, steps + 1):
-            t = i / steps
-            tt = t * t * (3 - 2 * t)
-            u = 1 - tt
-            bx = u * u * sx + 2 * u * tt * cx + tt * tt * tx
-            by = u * u * sy + 2 * u * tt * cy + tt * tt * ty
-            if i < steps and self.jitter:
-                bx += random.uniform(-1.0, 1.0)
-                by += random.uniform(-1.0, 1.0)
-            win32api.SetCursorPos((int(bx), int(by)))
-            time.sleep(dur / steps)
+    def _foreground(self) -> bool:
+        return bool(self._hwnd and is_foreground(self._hwnd))
 
-    def run(self, nudge: bool = False) -> None:
+    def run(self, nudge: bool = False) -> None:        # nudge 兼容旧签名,已弃用(不再微动)
         self.stop_flag = False
         self.skipped = 0
+        _ = cfg.timing_jitter()
         hwnd = find_game_hwnd()
         if not hwnd:
             self.log("未找到游戏窗口『王者荣耀世界』,请先运行游戏")
             return
-        self.log("实时检测已启动(游戏态不动作;仅游戏前台;F12 急停)")
+        self._hwnd = hwnd
+        if not self.rec.ready:
+            self.log("剧情识别未标定:缺 story/templates/raw 模板(kc_f9/kc_esc/confirm_skip)")
+            dev_log("剧情启动失败:识别模板未就绪")
+            return
+        self.log("实时检测已启动(只在剧情里动作:菜单/游戏/黑屏过场一律不动;仅游戏前台;F12 急停)")
         dbg = self._open_debug()
 
-        esc_pending = False        # 已按 ESC,等确认框
+        esc_pending = False
         esc_t = 0.0
-        last_skip = 0.0            # 上次点确认框跳过
-        block_esc_until = 0.0      # 此刻前不按 ESC
-        last_play_t = -99.0        # 上次见到游戏态
+        block_esc_until = 0.0
+        last_skip = 0.0
+        last_skip_seen = -99.0            # 上次见到"可跳过"信号(模板 skip 或 OCR 读到「跳过」)
         next_advance = 0.0
-        next_nudge = 0.0           # 沉浸式微动:下次允许微动的时刻
-        last_ocr = 0.0
+        last_opt_check = 0.0
+        last_confirm_check = 0.0          # 确认框标题 OCR 复核的限频(防菜单金按钮每帧 OCR)
+        bar_state = "none"                # 限频 OCR 精判结果:skip / story / none(见 recognizer.read_bar)
+        opt_mode, opt_pt = "none", None   # story 态的选项判定(限频刷新):none/choice/hold
         last_dbg = ""
-        last_advance_log = ""
-        with mss.mss() as sct:
-            while not self.stop_flag:
-                if self.paused or not is_foreground(hwnd):
-                    time.sleep(0.25)
-                    continue
-                now = time.time()
-                if now - last_ocr < self.OCR_INTERVAL:
-                    time.sleep(0.05)
-                    continue
-                last_ocr = now
-                f = self._grab(sct, hwnd)
-                if f is None:
-                    continue
+        last_log = ""
+        last_fg_warn = 0.0                 # 「游戏不在前台」提示限频
+        try:
+            with GameCapture(hwnd) as cap:
+                self.log("画面捕获:GDI BitBlt(无黄框、无光标闪烁;参考 BetterGI/MaaFramework)")
+                while not self.stop_flag:
+                    if self.paused or not is_foreground(hwnd):   # 安全:只在游戏前台时动作
+                        if not self.paused and time.time() - last_fg_warn > 3.0:
+                            last_fg_warn = time.time()
+                            self.log("⏸ 游戏不在最前台 → 已暂停")
+                        time.sleep(0.2)
+                        continue
+                    now = time.time()
+                    f = cap.grab()
+                    if f is None:
+                        time.sleep(self.TICK)
+                        continue
 
-                state, pt = self.rec.classify(f)
-                if state != last_dbg:
-                    self._dbg(dbg, now, state)
-                    last_dbg = state
-                # ESC 后超时没等到确认框就放弃,并冷却一段
-                if esc_pending and now - esc_t > self.ESC_PENDING_S:
-                    esc_pending = False
-                    block_esc_until = now + self.ABORT_BLOCK
-                    self.log("ESC 后未见确认框,暂停(剧情可能已结束)")
-                if state == "play":
-                    last_play_t = now
-                    esc_pending = False
-                recent_play = now - last_play_t < self.GAMEPLAY_STICK
+                    state, pt = self.rec.classify(f)          # confirm / gate(也许在剧情) / idle —— 纯模板,快
+                    if state != last_dbg:
+                        self._dbg(dbg, now, state)
+                        last_dbg = state
+                    if state != "gate":
+                        bar_state, opt_mode, opt_pt = "none", "none", None   # 离开剧情 → 复位精判
+                    # ESC 等待超时 → 放弃冷却(任何状态下都判,杜绝连按 ESC)
+                    if esc_pending and now - esc_t > self.ESC_PENDING_S:
+                        esc_pending = False
+                        block_esc_until = now + self.ABORT_BLOCK
+                        self._dbg(dbg, now, ">> ESC 后未见确认框(超时放弃)")
+                        self.log("ESC 后未见确认框,暂停(剧情可能已结束)")
 
-                if state == "confirm" and pt and now - last_skip > self.CONFIRM_GAP:
-                    self._click_norm(hwnd, pt)
-                    self.skipped += 1
-                    self.on_count(self.skipped)
-                    self.log(f"✓ 跳过剧情(确认「跳过」)#{self.skipped}")
-                    last_skip = now
-                    block_esc_until = now + self.POST_SKIP_BLOCK
-                    esc_pending = False
-                    time.sleep(0.4)
+                    # gate 态:限频 OCR 精判(背景无关)→ skip / story / none;none=模板假阳,实际不在剧情
+                    if state == "gate" and now - last_opt_check >= self.OPT_CHECK:
+                        last_opt_check = now
+                        bar_state = self.rec.read_bar(f)
+                        if bar_state == "skip":
+                            last_skip_seen = now
+                            self._dbg(dbg, now, ">> read_bar=SKIP")
+                        elif bar_state == "story":
+                            opt_mode, opt_pt = self.rec.read_options(f)
+                    skip_active = now - last_skip_seen < self.SKIP_HOLD
 
-                elif recent_play:
-                    pass   # 刚在游戏世界(含边界抖动),不动作
+                    if state == "confirm":
+                        # 金「跳过」按钮模板易在菜单其它金按钮上误配 → 限频 OCR 复核标题含「本段」才点;
+                        # confirm 帧**永不**落到下面的 ESC/advance(即便 skip_active),防误按 ESC 关掉确认框。
+                        if pt and now - last_confirm_check >= 0.4:
+                            last_confirm_check = now
+                            isd = self.rec.is_skip_dialog(f)
+                            self._dbg(dbg, now, f">> CONFIRM态 is_skip_dialog={isd} gap_ok={now-last_skip>self.CONFIRM_GAP}")
+                            if now - last_skip > self.CONFIRM_GAP and isd:
+                                time.sleep(random.uniform(*self.CLICK_DELAY))   # 点击随机延迟
+                                self._click_norm(hwnd, pt)
+                                self.skipped += 1
+                                self.on_count(self.skipped)
+                                self._dbg(dbg, now, ">> CLICK confirm 完成跳过")
+                                self.log(f"✓ 跳过剧情(确认「跳过」)#{self.skipped}")
+                                last_skip = now
+                                esc_pending = False
+                                block_esc_until = now + self.POST_SKIP_BLOCK
+                                time.sleep(0.3)
 
-                elif state == "skip":
-                    if not esc_pending and now > block_esc_until:
-                        self._press_esc()
-                        self.log("检测到可跳过剧情 → ESC,等待确认框")
-                        esc_pending, esc_t = True, now
+                    elif state == "idle":
+                        pass   # 菜单/游戏/黑屏过场 → 光标不动、不误点(即便刚跳过也不在这里 ESC)
 
-                elif state in ("dialogue", "continue", "black"):
-                    if now >= next_advance:
-                        self._click_here()
-                        next_advance = now + random.uniform(*self.ADVANCE_INTERVAL)
-                        if last_advance_log != state:
-                            self.log({"dialogue": "对话推进(点击)", "continue": "点击空白处继续",
-                                      "black": "黑屏过场 → 点击推进"}[state])
-                            last_advance_log = state
+                    elif skip_active:
+                        # 可跳过段(OCR 读到「跳过」)→ 只走 ESC 调确认框,**绝不点击推进**
+                        # (修复"跳过条已出却还点两三下才跳")
+                        if not esc_pending and now > block_esc_until:
+                            sent = self._press_esc()
+                            self._dbg(dbg, now, f">> PRESS ESC sent={sent}")
+                            self.log("检测到可跳过剧情 → ESC,等待确认框")
+                            esc_pending, esc_t = True, now
 
-                elif nudge and state == "immersive":
-                    # 可选(界面开关):仅沉浸式剧情才微动唤出控制条,唤出后由上面 ESC/点击接管。
-                    # 只移动不点击;游戏态已被 recent_play 先拦截,不会触发。
-                    if now >= next_nudge:
-                        self._nudge()
-                        next_nudge = now + random.uniform(*self.NUDGE_INTERVAL)
-                        if last_advance_log != "nudge":
-                            self.log("沉浸式剧情 → 鼠标微动唤出控制条")
-                            last_advance_log = "nudge"
+                    elif bar_state == "story":
+                        # OCR 确认在剧情、非可跳过:旁白/不可跳过 → 点箭头处快速推进;真选项 → 点该项;再见/退出 → hold。
+                        if opt_mode == "hold":
+                            if last_log != "hold":
+                                self.log("对话选项含「再见/退出」→ 交给你手动选择,脚本不点")
+                                last_log = "hold"
+                        elif now >= next_advance:
+                            target = opt_pt if (opt_mode == "choice" and opt_pt) else NEUTRAL_PT
+                            self._click_norm(hwnd, target)
+                            next_advance = now + random.uniform(*self.CLICK_DELAY)   # 随机间隔(拟人)
+                            tag = "对话选项 → 点第一项" if opt_mode == "choice" else "不可跳过剧情 → 点击推进"
+                            if last_log != tag:
+                                self.log(tag)
+                                last_log = tag
 
-                # 'interact' / 'immersive'(未开微动):不动作
-                time.sleep(0.05)
-        self._close_debug(dbg)
+                    # gate 但 bar_state=='none'(模板假阳,OCR 没读到剧情字)→ 不动作
+                    time.sleep(self.TICK)
+        finally:
+            release_known_keys(self.log)
+            self._close_debug(dbg)
         self.log(f"实时检测结束,共跳过 {self.skipped} 段")
 
-    _STATE_CN = {
-        "play": "游戏世界", "confirm": "可跳过确认框", "interact": "交互框(宝箱等)",
-        "skip": "可跳过剧情", "dialogue": "对话推进", "continue": "点击空白处继续",
-        "black": "黑屏过场", "immersive": "沉浸式剧情",
-    }
-
-    def _state_cn(self, state: str) -> str:
-        return self._STATE_CN.get(state, state)
-
+    # ---- 调试日志(状态序列)----
     def _open_debug(self):
-        applog.debug("story: run start")
-        return True
+        try:
+            d = HERE.parent / "sessions"
+            d.mkdir(parents=True, exist_ok=True)
+            fp = open(d / "_story_debug.log", "a", encoding="utf-8")
+            fp.write(f"\n==== run {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+            fp.flush()
+            return fp
+        except Exception as exc:
+            dev_log("剧情调试日志打开失败", exc)
+            return None
 
     def _dbg(self, fp, now, state) -> None:
-        applog.debug(f"story state -> {self._state_cn(state)}")
+        if fp is None:
+            return
+        try:
+            fp.write(f"{time.strftime('%H:%M:%S')}  {state}\n")
+            fp.flush()
+        except Exception as exc:
+            dev_log("剧情调试日志写入失败", exc)
 
     def _close_debug(self, fp) -> None:
-        applog.debug("story: run end")
+        try:
+            fp and fp.close()
+        except Exception as exc:
+            dev_log("剧情调试日志关闭失败", exc)
 
 
 if __name__ == "__main__":
-    StorySkipper().run(nudge="--nudge" in sys.argv)
+    StorySkipper().run()
