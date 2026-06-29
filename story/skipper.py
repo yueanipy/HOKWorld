@@ -104,16 +104,27 @@ class StorySkipper:
         last_dbg = ""
         last_log = ""
         last_fg_warn = 0.0                 # 「游戏不在前台」提示限频
+        gone_since = 0.0                   # 游戏窗口彻底消失起始时刻(用户退出游戏 → 停止)
         try:
             with GameCapture(hwnd) as cap:
-                self.log("画面捕获:GDI BitBlt(无黄框、无光标闪烁;参考 BetterGI/MaaFramework)")
+                self.log("画面捕获已就绪(GDI BitBlt,无黄框、无光标闪烁)")
                 while not self.stop_flag:
                     if self.paused or not is_foreground(hwnd):   # 安全:只在游戏前台时动作
+                        # 用户退出游戏(窗口彻底没了)→ 停止;只是没焦点/最小化 → 暂停。给 5s 宽限防加载瞬断。
+                        if not self.paused and find_game_hwnd() is None:
+                            if not gone_since:
+                                gone_since = time.time()
+                            elif time.time() - gone_since > 5.0:
+                                self.log("游戏已退出 → 停止实时检测")
+                                break
+                        else:
+                            gone_since = 0.0
                         if not self.paused and time.time() - last_fg_warn > 3.0:
                             last_fg_warn = time.time()
                             self.log("⏸ 游戏不在最前台 → 已暂停")
                         time.sleep(0.2)
                         continue
+                    gone_since = 0.0
                     now = time.time()
                     f = cap.grab()
                     if f is None:
