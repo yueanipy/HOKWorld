@@ -106,7 +106,7 @@ class GatherPicker:
         text = ""
         try:
             with GameCapture(hwnd) as cap:
-                self.log("画面捕获:GDI BitBlt(无黄框、无光标闪烁;参考 BetterGI/MaaFramework)")
+                self.log("画面捕获已就绪(GDI BitBlt,无黄框、无光标闪烁)")
                 while not self.stop_flag:
                     if self.paused or not is_foreground(hwnd):
                         prompt_active = False        # 暂停/切走 → 复位,回来当新提示
