@@ -13,6 +13,7 @@ from paths import config_path
 
 DEFAULTS = {
     "timing_jitter": False,          # 时序/位移随机抖动(默认关闭)
+    "game_path": "",                 # 《王者荣耀世界》启动器 exe 路径;留空=自动定位(注册表/开始菜单);自动找不到时手填
 }
 
 
