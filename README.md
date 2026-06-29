@@ -4,7 +4,7 @@
 
 只截屏、只发标准键鼠输入,不读写游戏内存、不注入、不改封包、不碰任何游戏文件。仅供学习研究,使用风险自负,请遵守游戏用户协议。
 
-> **想直接用、不装 Python?** 到 [Releases](https://github.com/yueanipy/HOKWorld/releases) 下载免装安装版(当前 `v0.3.1`:`HOKWorldScript-0.0.3-Setup.exe`),双击安装即用。下面是从源码运行的说明。
+> **想直接用、不装 Python?** 到 [Releases](https://github.com/yueanipy/HOKWorld/releases) 下载免装安装版(当前 `v0.3.2`:`HOKWorldScript-0.3.2-Setup.exe`),双击安装即用。下面是从源码运行的说明。
 
 ## 运行环境
 
