@@ -20,8 +20,8 @@ from qfluentwidgets import (
     BodyLabel, CaptionLabel, CardWidget, ExpandGroupSettingCard, FluentIcon as FIF,
     FluentWindow, HyperlinkButton, IconWidget, InfoBar, InfoBarPosition, MessageBoxBase,
     NavigationItemPosition, PrimaryPushButton, PushButton, PushSettingCard, SettingCard,
-    SpinBox, SubtitleLabel, SwitchButton, SwitchSettingCard, TextEdit, TitleLabel,
-    setTheme, setThemeColor, Theme,
+    SingleDirectionScrollArea, SpinBox, SubtitleLabel, SwitchButton, SwitchSettingCard,
+    TextEdit, TitleLabel, setTheme, setThemeColor, Theme,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -30,6 +30,7 @@ sys.path.insert(0, str(HERE))
 import applog  # noqa: E402
 from config import cfg  # noqa: E402
 from paths import resource_path  # noqa: E402
+from runtime_guard import dev_log, registry, release_known_keys  # noqa: E402
 from version import APP_DISPLAY, GITHUB_OWNER, GITHUB_REPO, __version__  # noqa: E402
 from winenv import center_window, hide_console, is_admin, relaunch_as_admin, set_app_id  # noqa: E402
 
@@ -161,15 +162,89 @@ class GatherWorker(QThread):
             self.bot.set_paused(on)
 
 
-class FishingInterface(QWidget):
-    _CARD_DESC = "自动完成多轮钓鱼:抛竿 → 上钩啦 → 拉杆 → 收线 → 结算"
+class LaunchWorker(QThread):
+    """自动启动游戏线程(热重载 launcher;**不**重载 fishing.matcher,保住 OCR 单例不被重置)。"""
+    sig_log = Signal(str)
+    sig_done = Signal(bool)        # 是否成功进入游戏(已点「开始游戏」)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setObjectName("fishingInterface")
+        self.bot = None
+
+    def run(self) -> None:
+        import importlib
+        try:
+            import winenv
+            import capture
+            import launcher
+            for m in (winenv, capture, launcher):
+                try:
+                    importlib.reload(m)
+                except Exception:
+                    pass
+            from launcher import GameLauncher
+        except Exception as exc:
+            dev_log("加载 launcher 失败,跳过自动启动", exc)
+            self.sig_log.emit(f"自动启动模块加载失败,已跳过(不影响实时检测):{type(exc).__name__}")
+            self.sig_done.emit(False)
+            return
+        self.bot = GameLauncher(log=self._log)
+        ok = False
+        try:
+            ok = bool(self.bot.run())
+        except Exception as exc:
+            dev_log("自动启动游戏线程异常", exc)
+            release_known_keys(self.sig_log.emit)
+            self.sig_log.emit(f"[错误] {type(exc).__name__}: {exc}")
+            self.sig_log.emit("自动启动出错,已跳过(不影响实时检测)")
+        self.sig_done.emit(ok)
+
+    def _log(self, msg: str) -> None:
+        dev_log(f"[launcher] {msg}")
+        self.sig_log.emit(msg)
+
+    def stop(self) -> None:
+        if self.bot:
+            self.bot.stop()
+
+    def set_paused(self, on: bool) -> None:
+        if self.bot:
+            self.bot.set_paused(on)
+
+
+class ScrollInterface(QWidget):
+    """可滚动页面基类:子类把控件加到 self.vbox(置于垂直滚动视图中)。
+    - 内容未超出视口 → 不显示滚动条,滚轮也不滚(不会把页面/窗口拉长);
+    - 内容超出可视范围 → 自动出现细滚动条,可向下滑;悬停/按住拖动时滚动条变粗(参考 MaaNTE);
+    - 窗口放大到能容纳(如全屏)→ 滚动条自动隐藏。
+    """
+
+    def __init__(self, object_name: str) -> None:
+        super().__init__()
+        self.setObjectName(object_name)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.scroll = SingleDirectionScrollArea(self, orient=Qt.Vertical)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.enableTransparentBackground()
+        self.view = QWidget(self.scroll)
+        self.view.setObjectName("scrollView")
+        self.view.setStyleSheet("#scrollView{background:transparent;}")
+        self.scroll.setWidget(self.view)
+        outer.addWidget(self.scroll)
+        self.vbox = QVBoxLayout(self.view)
+
+
+class FishingInterface(ScrollInterface):
+    _CARD_DESC = "自动完成多轮钓鱼:抛竿 → 上钩啦 → 拉杆 → 收线 → 结算"
+
+    def __init__(self) -> None:
+        super().__init__("fishingInterface")
         self._worker: FishWorker | None = None
 
-        root = QVBoxLayout(self)
+        root = self.vbox
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(14)
 
@@ -264,20 +339,21 @@ class FishingInterface(QWidget):
             self._append("F12 急停")
 
 
-class RealtimeInterface(QWidget):
-    """实时检测页:点开始后实时读屏,自动识别跳过剧情;可选「经过材料自动采集」一起跑。
-    无触发状态时不做任何操作。"""
+class RealtimeInterface(ScrollInterface):
+    """实时检测页(对齐 ok-nte「实时触发」):点开始后实时读屏,自动识别跳过剧情;
+    可选开启「经过材料自动采集」,与剧情跳过同时跑。无触发状态时不动作。"""
     _DESC = "点开始后实时读屏:自动识别跳过剧情;可选开「经过材料自动采集」一起跑。无触发状态时不动作"
 
     def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("realtimeInterface")
+        super().__init__("realtimeInterface")
         self._worker: StoryWorker | None = None
         self._gather: GatherWorker | None = None
+        self._launcher: LaunchWorker | None = None
         self._paused = False
+        self._aborting = False                       # 用户在"自动启动"阶段点停止 → 别再续接实时检测
         self._last_msg = ""
 
-        root = QVBoxLayout(self)
+        root = self.vbox
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(14)
 
@@ -291,14 +367,19 @@ class RealtimeInterface(QWidget):
         self.card.addWidget(self.pause_btn)
         self.card.addWidget(self.stop_btn)
         self.nudge_switch = SwitchButton()
-        self.card.addGroup(FIF.ROBOT, "鼠标微动唤出控制条（不稳定）",
-                           "剧情控制条若会自动隐藏则开启(沉浸式剧情里平滑微动鼠标唤出)", self.nudge_switch)
+        self.nudge_switch.setChecked(False)
+        self.nudge_switch.setEnabled(False)          # 已废弃:代码不再微动鼠标,避免用户误开导致误解
         self.gather_switch = SwitchButton()
         self.gather_switch.setChecked(True)          # 默认开启:点开始即跳剧情 + 自动采集
         self.card.addGroup(FIF.SYNC, "经过材料自动采集(F)",
-                           "默认开启;与剧情跳过一起跑:经过材料/宝箱/重现自动按 F(按图标识别;NPC/商店/对话/组队不动)。"
+                           "经过材料/宝箱/重现自动按 F(按图标识别;NPC/商店/对话/组队不动)。"
                            "误采的交互可在「设置 · 采集碰撞名单」里加一行排除",
                            self.gather_switch)
+        # 自动启动游戏(副栏开关):开启后点「开始」先自动启动游戏再实时检测(详细流程见 docs/开发文档.md)
+        self.launch_switch = SwitchButton()
+        self.launch_switch.setChecked(True)          # 默认开:点「开始」即自动启动游戏(已在游戏则跳过)
+        self.card.addGroup(FIF.GAME, "自动启动游戏",
+                           "点击「开始」自动启动游戏", self.launch_switch)
         root.addWidget(self.card)
 
         self.status_card = CardWidget()
@@ -319,20 +400,53 @@ class RealtimeInterface(QWidget):
         self.stop_btn.clicked.connect(self._stop)
 
     def _start(self) -> None:
-        if self._worker:
+        if self._paused and (self._worker or self._launcher or self._gather):
+            self._toggle_pause()           # 暂停中点「开始」= 继续(等同「继续」按钮)
+            return
+        if self._worker or self._launcher:
+            return
+        ok, reason = registry.start("实时检测")
+        if not ok:
+            InfoBar.warning("任务已在运行", reason, duration=4000,
+                            position=InfoBarPosition.TOP, parent=self)
             return
         if not is_admin():
             InfoBar.warning("需要管理员", "请以管理员重启后再开始(游戏提权)。",
                             duration=4000, position=InfoBarPosition.TOP, parent=self)
         self._paused = False
-        self._show_status("实时检测启动中…(无剧情不动作;游戏需前台;F12 急停)")
-        self._worker = StoryWorker(self.nudge_switch.isChecked())
-        self._worker.sig_log.connect(self._append)
-        self._worker.sig_done.connect(self._on_done)
+        self._aborting = False
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.pause_btn.setText("暂停")
         self.stop_btn.setEnabled(True)
+        registry.set_stopper("实时检测", self._stop_workers_no_ui)
+        if self.launch_switch.isChecked():
+            # 先按当前界面状态自动启动游戏;进游戏 / 已在游戏后再开始实时检测
+            self._show_status("自动启动游戏中…(到游戏后自动开始实时检测;仅前台时动作;F12 急停)")
+            self._set_content("自动启动游戏中…")
+            self._launcher = LaunchWorker()
+            self._launcher.sig_log.connect(self._append)
+            self._launcher.sig_done.connect(self._on_launch_then_detect)
+            self._launcher.start()
+        else:
+            self._begin_detection()
+
+    def _on_launch_then_detect(self, ok: bool) -> None:
+        if self._launcher:
+            self._launcher.wait(1500)
+            self._launcher = None
+        if self._aborting:                     # ③ 仅"用户主动停 / F12"才不续接;其余一律接实时检测
+            self._maybe_reset_ui()
+            return
+        if not ok:                             # 启动超时/失败也接检测(best-effort 前置;没进游戏则检测自报收尾)
+            self._append("自动启动未完成,仍尝试开始实时检测(无游戏则自动收尾)")
+        self._begin_detection()                # 启动完成 / 已在游戏 / 启动失败 → 都开始实时检测,启动只是前置不阻断
+
+    def _begin_detection(self) -> None:
+        self._show_status("实时检测启动中…(无剧情不动作;游戏需前台;F12 急停)")
+        self._worker = StoryWorker(self.nudge_switch.isChecked())
+        self._worker.sig_log.connect(self._append)
+        self._worker.sig_done.connect(self._on_done)
         self._set_content("运行中…")
         self._worker.start()
         if self.gather_switch.isChecked():
@@ -342,20 +456,35 @@ class RealtimeInterface(QWidget):
             self._gather.sig_done.connect(self._on_gather_done)
             self._gather.start()
 
+    def _stop_workers_no_ui(self) -> None:
+        if self._launcher:
+            self._launcher.stop()
+        if self._worker:
+            self._worker.stop()
+        if self._gather:
+            self._gather.stop()
+
     def _toggle_pause(self) -> None:
-        if not self._worker:
+        if not (self._worker or self._launcher):
             return
         self._paused = not self._paused
-        self._worker.set_paused(self._paused)
+        if self._launcher:
+            self._launcher.set_paused(self._paused)
+        if self._worker:
+            self._worker.set_paused(self._paused)
         if self._gather:
             self._gather.set_paused(self._paused)
         self.pause_btn.setText("继续" if self._paused else "暂停")
-        self._append("已暂停实时检测" if self._paused else "已继续实时检测")
+        self.start_btn.setEnabled(self._paused)   # 暂停时「开始」可按(=继续);运行时不可按
+        self._append("已暂停" if self._paused else "已继续")
         self._set_content("已暂停" if self._paused else "运行中…")
 
     def _stop(self) -> None:
+        self._aborting = True
+        self._append("停止中…")
+        if self._launcher:
+            self._launcher.stop()
         if self._worker:
-            self._append("停止中…")
             self._worker.stop()
         if self._gather:
             self._gather.stop()
@@ -375,8 +504,10 @@ class RealtimeInterface(QWidget):
         self._maybe_reset_ui()
 
     def _maybe_reset_ui(self) -> None:
-        if self._worker or self._gather:   # 两个线程都结束才复位按钮
+        if self._worker or self._gather or self._launcher:   # 启动/剧情/采集全部结束才复位按钮
             return
+        registry.finish("实时检测")
+        self._aborting = False
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("暂停")
@@ -399,15 +530,15 @@ class RealtimeInterface(QWidget):
         self.status.setText(msg)
 
     def emergency_stop(self) -> None:
+        self._aborting = True                  # 急停若发生在"自动启动"阶段,别再续接实时检测
         stopped = False
-        if self._worker:
-            self._worker.stop()
-            stopped = True
-        if self._gather:
-            self._gather.stop()
-            stopped = True
+        for w in (self._worker, self._gather, self._launcher):
+            if w:
+                w.stop()
+                stopped = True
         if stopped:
             self._append("F12 急停")
+        release_known_keys(self._append)
 
 
 class ListEditDialog(MessageBoxBase):
@@ -436,16 +567,15 @@ class ListEditDialog(MessageBoxBase):
         return self.edit.toPlainText()
 
 
-class SettingsInterface(QWidget):
+class SettingsInterface(ScrollInterface):
     """设置(简洁卡片版):采集白名单(强制采)/ 碰撞名单(跳过)点开才编辑;时序抖动;运行状态。
     名单编辑的是「用户数据目录」里的文件(随更新/换机保留),不是安装目录的模板。
     """
 
     def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("settingsInterface")
+        super().__init__("settingsInterface")
 
-        root = QVBoxLayout(self)
+        root = self.vbox
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(12)
         root.addWidget(TitleLabel("设置"))
@@ -524,11 +654,10 @@ class SettingsInterface(QWidget):
                           position=InfoBarPosition.TOP, parent=self)
 
 
-class AboutInterface(QWidget):
+class AboutInterface(ScrollInterface):
     def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("aboutInterface")
-        lo = QVBoxLayout(self)
+        super().__init__("aboutInterface")
+        lo = self.vbox
         lo.setContentsMargins(28, 22, 28, 22)
         lo.addWidget(TitleLabel("关于"))
         lo.addWidget(BodyLabel(f"{APP_DISPLAY}  ·  {APP_VERSION}"))
@@ -581,6 +710,7 @@ class MainWindow(FluentWindow):
     def _on_key(self, key) -> None:
         try:
             if key == keyboard.Key.f12:
+                registry.stop_all("F12 急停")
                 self.fishing.emergency_stop()
                 self.realtime.emergency_stop()
         except Exception:
