@@ -27,9 +27,9 @@ F9 键帽:剧情帧≈0.99、游戏/菜单≤0.74,分离极大 → 当门最稳(
 
 classify(frame) → (state, pt):
   confirm 确认框金「跳过」在 → 点它(pt)。**独立于门**(确认框会盖住右上抓拍)。
-  skip    门内 且 [Esc] 键帽在(可跳过)→ 按 ESC。
-  story   门内 非可跳过(不可跳过 / 自动对话)→ skipper 快速点击推进 + 限频 read_options 查选项。
+  gate    模板预筛过门(也许在剧情)→ skipper 限频调 read_bar(OCR)精判 skip/story/none 再决定动作。
   idle    其它(游戏 / 菜单 / 日常面板 / 黑屏过场 / 加载)→ **不动作**。
+read_bar(frame) → "skip"|"story"|"none":门内 OCR 精判(可跳过→ESC / 非可跳过→推进 / 假阳→不动)。
 read_options(frame) → ("hold"|"choice"|"none", pt):门内非可跳过时怎么推进(见方法注释)。
 """
 from __future__ import annotations
@@ -63,15 +63,27 @@ ROI_DLG_TITLE = (0.30, 0.26, 0.70, 0.46)  # 确认框标题「是否跳过本段
 ROI_OPT_TEXT = (0.63, 0.34, 0.98, 0.80) # 对话选项文字区(右侧竖排,**上半**);下边 0.80 刻意避开底部居中字幕
                                         # → 旁白字幕(y≈0.87)不算选项 → 走快速中性点推进;真选项(y≈0.4~0.75)才点
 
-# 多尺度集:模板与实时帧都归一化到 1920 宽 → 贴近 1.0,留 ±10% 容不同分辨率/游戏内 UI 缩放的渲染差
-# (实测 ±10% 下 F9 仍 游戏0.72 vs 剧情0.99、Esc 非跳过0.86 vs 可跳过1.0,分离不变);更宽会在均匀区误相关,禁用
-SCALES = (0.9, 0.95, 1.0, 1.05, 1.1)
+# 区域截图(skipper 用 cap.grab_region_canvas 只截这些小块贴 1920 画布,代替整帧 4K 抓取+缩放):
+# 每块 = 覆盖对应 ROI 并四周各留 ~1% 余量(吸收 round(贴图)vs int(裁切)的取整差)。
+# 每 tick 截 REGION_TR + REGION_CONFIRM(合计 ~14% 面积);OCR 限频时按需补 REGION_OPT / REGION_DLG_TITLE。
+# 等价性由 story/_region_validate.py 在 5 段 4K 剧情视频上离线验证(状态/分数/点击点双路径一致)。
+REGION_TR = (0.77, 0.0, 1.0, 0.10)            # 覆盖 ROI_TR(classify 门 + read_bar)
+REGION_CONFIRM = (0.39, 0.57, 0.81, 0.85)     # 覆盖 ROI_CONFIRM(classify 确认框)
+REGION_DLG_TITLE = (0.29, 0.25, 0.71, 0.47)   # 覆盖 ROI_DLG_TITLE(is_skip_dialog 复核)
+REGION_OPT = (0.62, 0.33, 0.99, 0.81)         # 覆盖 ROI_OPT_TEXT(read_options)
+
+# 多尺度集:模板与实时帧都归一化到 1920 宽 → 贴近 1.0,留 ±5% 容不同分辨率/游戏内 UI 缩放的渲染差
+# (5 尺度 ±10% → 3 尺度 ±5%:replay_test 132 帧逐帧状态与 5 尺度完全一致、正例分数不变——最佳尺度
+# 本就落在 0.95~1.05 内;每 tick 模板匹配次数 -40%。更宽会在均匀区误相关,禁用)
+SCALES = (0.95, 1.0, 1.05)
 
 # 阈值(story/replay_test.py 在 5 段真实视频标定)
 GATE_LO = 0.60      # 模板**预筛**门(廉价):max(F9,Esc)≥此 = "也许在剧情",才去 OCR 精判。键帽/抓拍字在本作是
                     # **半透明**(背景透上来)→ 模板分随背景 0.67~1.0 飘、okww 二值/白掩膜反而更差(实测),故模板只当粗筛;
                     # 真机:剧情≥0.67、游戏≤0.60。精确判定走 read_bar(OCR 抓拍/跳过,背景无关,MaaNTE/okww 文字识别那一套)。
-TH_ESC = 0.90       # 可跳过:Esc 键帽。真 Esc≈1.0、仅有 F9 的非跳过帧≈0.86 → 0.90 略早触发又不误判
+TH_ESC = 0.90       # Esc 键帽注册占位(**勿作判定!**)。2026-07 真机证伪:键帽半透明,暗场景真跳过帧
+                    # 长期 <0.90、无 Esc 的帧又能到 0.86 → 分布重叠,模板分辨不出"键帽在/不在",
+                    # 曾用它做 ESC 双因子把第一段话拦了 8s。可跳过/不可跳过一律由 read_bar OCR 精判
 TH_CONFIRM = 0.75   # 确认框金「跳过」:确认框 0.95~1.0、其它≤0.49 → 0.75 极稳
 MIN_CONF = 0.45     # OCR 置信度过滤
 MIN_OPT_LEN = 2     # 选项文字最短字数
@@ -158,9 +170,10 @@ class StoryRecognizer:
         故意不在这里点黑屏/不微动:任何"非 positively 在剧情"的状态都返回 idle=不动
         (修复"切活动/日常面板光标闪烁"与"剧情结束/黑屏过场后误点=攻击"——见 skipper 注释)。
           confirm 确认框金「跳过」在 → 点它(pt)。独立于门(确认框遮住右上抓拍)。
-          skip    门内 且 [Esc] 键帽在(可跳过)→ 按 ESC。
-          story   门内 非可跳过(不可跳过 / 自动对话)→ 交 skipper:快速点击推进 + 限频 OCR 查选项。
-          idle    其它(游戏 / 菜单 / 日常面板 / 黑屏过场 / 加载)→ **不动作**。"""
+          gate    模板预筛过门(也许在剧情)→ 交 skipper:限频 read_bar(OCR)精判 skip/story/none 再动作。
+          idle    其它(游戏 / 菜单 / 日常面板 / 黑屏过场 / 加载)→ **不动作**。
+        入参可以是整帧(replay 回放),也可以是 grab_region_canvas 的 1920 画布(实时,已归一化
+        → norm() 直接原样返回,免掉整帧 4K 缩放;所有 ROI 都在画布已贴的区域内)。"""
         if not self.ready:
             return ("idle", None)
         f = self.bank.norm(frame)
@@ -169,9 +182,10 @@ class StoryRecognizer:
             return ("confirm", (cx, cy))
         # 门=F9 抓拍 或 Esc 跳过(两者都是剧情专有键帽;Esc 独立判,不被 F9 漏配挡住)。
         # Esc 在 = 可跳过段(同时也是最强剧情信号)→ skip;否则 F9 在 = 非可跳过/自动对话 → story。
-        # 模板只做廉价预筛:max(F9,Esc)≥GATE_LO = "也许在剧情" → 返回 "gate",由 skipper 限频 OCR(read_bar)精判
-        # skip/story/none(背景无关)。半透明 UI 下模板分会随背景飘,故不在这里下 skip/story 定论。
-        if max(self._score("kc_f9", f), self._score("kc_esc", f)) >= GATE_LO:
+        # 模板只做廉价预筛:F9≥GATE_LO 或 Esc≥GATE_LO = "也许在剧情" → 返回 "gate",由 skipper 限频
+        # OCR(read_bar)精判 skip/story/none(背景无关)。半透明 UI 下模板分会随背景飘,故不在这里下定论。
+        # or 短路与 max(...)≥GATE_LO 判定等价;剧情帧 F9 几乎必过门 → 每 tick 省掉 Esc 的整轮多尺度匹配。
+        if self._score("kc_f9", f) >= GATE_LO or self._score("kc_esc", f) >= GATE_LO:
             return ("gate", None)
         return ("idle", None)
 
