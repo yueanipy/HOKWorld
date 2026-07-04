@@ -16,7 +16,7 @@
   · 优先级:白名单(强制采)> 黑名单(碰撞跳)> 图标默认(手型/重现采、其它跳)。
 
 按 F 用 win32 合成输入,需以管理员运行(游戏提权,UIPI 会拦普通权限的合成输入)。
-复用 recorder 的窗口/前台/截图 与 1920 归一化。可单独自测:  python -m gather.picker
+复用 winenv 的窗口/前台/截图 与 1920 归一化。可单独自测:  python -m gather.picker
 """
 from __future__ import annotations
 
@@ -37,6 +37,9 @@ VK_F = 0x46
 
 class GatherPicker:
     DETECT_INTERVAL = 0.02     # 轮询间隔(区域截图+图标分 ~12ms;截图提速后调快,更快抓到一闪而过的提示)
+    IDLE_INTERVAL = 0.06       # 空闲轮询(屏幕上没有任何 F 提示 → ~16Hz 慢扫,省 CPU/GDI 让给游戏;
+                               # 新提示最多晚 ~40ms 发现,而按 F 前本就要 OCR ~150ms 核名 → 无采集损失)
+    IDLE_AFTER = 1.5           # 无提示这么久才降频(材料密集区提示接连出现 → 一直满速清场)
     RETRY_GAP = 0.25          # 同一提示持续存在时的连按节奏(收掉最近的、提示跳到下一个 → 接着按,清场)
     MAX_PRESS = 20            # 单段提示连续按 F 的上限(防某个"采不掉的手型"无限连按;正常一段几下就清完)
     ABSENT_RESET = 0.3       # 提示消失这么久才算"结束";再出现当新提示(去抖,防闪烁误触发)
@@ -103,6 +106,7 @@ class GatherPicker:
         last_press = 0.0           # 上次按 F / 复核的时刻(连按节奏 RETRY_GAP)
         last_seen = 0.0            # 最近一次见到可动作提示(去抖,防闪烁误复位)
         last_fg_warn = 0.0         # 「游戏不在前台」提示限频
+        last_prompt = time.time()  # 最近一次屏幕上有 F 提示(含 NPC/商店等一切提示;空闲降频用,启动先满速)
         text = ""
         try:
             with GameCapture(hwnd) as cap:
@@ -116,7 +120,10 @@ class GatherPicker:
                         time.sleep(0.2)
                         continue
                     now = time.time()
-                    if now - last_tick < self.DETECT_INTERVAL:
+                    # 空闲降频:附近没有任何可交互提示时慢扫(跑图/战斗把 CPU/GDI 让给游戏),见提示即回满速
+                    interval = (self.DETECT_INTERVAL if now - last_prompt < self.IDLE_AFTER
+                                else self.IDLE_INTERVAL)
+                    if now - last_tick < interval:
                         time.sleep(0.01)
                         continue
                     last_tick = now
@@ -124,6 +131,8 @@ class GatherPicker:
                     if f is None:
                         continue
                     kind, fn = self.rec.classify(f)          # 快路:无 OCR
+                    if kind != "none":
+                        last_prompt = now                    # 任何 F 提示在场(含 NPC/商店)都保持满速
                     # 可动作 = 手型/重现;"别的图标"仅当配了白名单才需读字核对(否则直接忽略,不 OCR)
                     actionable = kind in ("pick", "chongxian") or (kind == "other" and self.rec.whitelist)
                     if actionable:
