@@ -2,7 +2,7 @@
 
 **为什么不能像剧情/采集那样绑定单一窗口**:启动器与游戏窗口**同标题**「王者荣耀世界」但 **hwnd 不同**
 (录制实测 920228=启动器 → 4850284=游戏);点「启动游戏」后窗口会更换。故本模块每帧**跟随当前前台窗口**
-(recorder.foreground_target),只要标题含「王者荣耀世界」就锁定它来截图/点击。
+(winenv.foreground_target),只要标题含「王者荣耀世界」就锁定它来截图/点击。
 
 **不必手动开启动器**:run() 开头若没有任何《王者荣耀世界》窗口,就**本地定位启动器 exe 并拉起**,等启动器窗口出现再进识别。
 定位跨机器通用(`find_game_exe`):① 配置 `game_path` → ② 注册表卸载项 DisplayIcon/InstallLocation → ③ 开始菜单 .lnk。
@@ -29,8 +29,10 @@ import time
 import winreg
 
 import cv2
+import numpy as np
 import win32con
 import win32gui
+import win32ui
 
 from capture import GameCapture
 from fishing.matcher import _get_ocr
@@ -205,29 +207,159 @@ def any_game_window():
     return found[0] if found else 0
 
 
-def _bring_to_front(h) -> None:
-    """把游戏/启动器窗口置前台(本程序点开始后是本程序在前台 → 不置前台会被遮挡:截不到、点不中)。
-    SetForegroundWindow 受系统限制时,用附加前台线程输入队列绕过。"""
-    try:
-        if win32gui.IsIconic(h):
-            win32gui.ShowWindow(h, win32con.SW_RESTORE)
-        win32gui.SetForegroundWindow(h)
-        return
-    except Exception:
-        pass
+# ----------------------------- 视觉最前判定(方案 B 的核心) -----------------------------
+# 本工具的截图(capture.GameCapture)是**从桌面 DC 按屏幕矩形截**,点击是**硬件光标点在屏幕坐标上**——
+# 两者作用的都是"屏幕上视觉最前的内容",与键盘焦点(GetForegroundWindow)无关。
+# 所以判"能否读屏/点击"的正确判据是:**启动器/游戏窗口在目标点上视觉最前**(WindowFromPoint)。
+# KingLauncher 是 CEF 多窗口程序:命中的常是它标题不精确的子窗口 → 一律**按进程号**归属判断。
+
+GA_ROOT = 2   # GetAncestor:取顶层根窗口
+
+
+def _win_pid(h) -> int:
     try:
         import win32process
-        cur = win32gui.GetForegroundWindow()
-        t_cur = win32process.GetWindowThreadProcessId(cur)[0]
-        t_tgt = win32process.GetWindowThreadProcessId(h)[0]
-        if t_cur and t_tgt and t_cur != t_tgt:
-            win32process.AttachThreadInput(t_cur, t_tgt, True)
-            try:
-                win32gui.SetForegroundWindow(h)
-            finally:
-                win32process.AttachThreadInput(t_cur, t_tgt, False)
+        return win32process.GetWindowThreadProcessId(h)[1]
+    except Exception:
+        return 0
+
+
+def _top_window_at(sx, sy):
+    """屏幕点 (sx,sy) 处视觉最前的**顶层**窗口(WindowFromPoint → GA_ROOT 祖先);失败返回 0。"""
+    try:
+        w = win32gui.WindowFromPoint((int(sx), int(sy)))
+        if not w:
+            return 0
+        root = ctypes.windll.user32.GetAncestor(w, GA_ROOT)
+        return root or w
+    except Exception:
+        return 0
+
+
+def _same_process_on_top(h, sx, sy) -> bool:
+    """屏幕点 (sx,sy) 处视觉最前的窗口是否属于 h 的进程(CEF 子窗口标题不精确 → 按 pid 判)。"""
+    top = _top_window_at(sx, sy)
+    if not top:
+        return False
+    if top == h:
+        return True
+    p_top, p_h = _win_pid(top), _win_pid(h)
+    return bool(p_top) and p_top == p_h
+
+
+# ----------------------------- 后台输入 / 后台截图(MaaNTE 同款机制) -----------------------------
+# MaaNTE(assets/interface.json)默认控制器:screencap="Background"、mouse="SendMessageWithCursorPos"、
+# keyboard="PostMessage" —— 鼠标/键盘做成**窗口消息直接发给目标 hwnd**、画面用**后台方式取窗口自身内容**。
+# 好处:**完全不需要前台/焦点、不动真实鼠标、不怕被遮挡** → 用户可随意点本程序看日志、用别的程序,互不干扰。
+# 这也是"自动点启动器"屡试屡败的真正解:此前纠结"怎么把启动器弄成前台",方向本身就错了。
+
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+MK_LBUTTON = 0x0001
+_CWP_SKIP = 0x0001 | 0x0002 | 0x0004        # SKIPINVISIBLE | SKIPDISABLED | SKIPTRANSPARENT
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+_u32 = ctypes.windll.user32
+_u32.ChildWindowFromPointEx.restype = ctypes.c_void_p
+_u32.ChildWindowFromPointEx.argtypes = [ctypes.c_void_p, _POINT, ctypes.c_uint]
+
+
+def _deep_child_at(hwnd, cx, cy):
+    """从顶层窗口下钻到客户区点 (cx,cy) 处**最深的可见子窗口**,返回 (子窗 hwnd, 子窗客户区坐标)。
+    CEF(KingLauncher)/UE 的鼠标消息要发给真正承载渲染的子窗口才会被处理,发给顶层壳常被忽略。"""
+    cur, pt = hwnd, (int(cx), int(cy))
+    for _ in range(16):
+        try:
+            ch = _u32.ChildWindowFromPointEx(cur, _POINT(pt[0], pt[1]), _CWP_SKIP)
+        except Exception:
+            break
+        if not ch or ch == cur:
+            break
+        sx, sy = win32gui.ClientToScreen(cur, pt)
+        pt = win32gui.ScreenToClient(ch, (sx, sy))
+        cur = ch
+    return cur, pt
+
+
+def _post_click_client(top_hwnd, cx, cy) -> bool:
+    """后台点击:向 (cx,cy)(top_hwnd 客户区坐标)处的最深子窗口 PostMessage
+    WM_MOUSEMOVE→LBUTTONDOWN→LBUTTONUP。不动真实鼠标、不需要前台(MaaNTE mouse=SendMessage 同款)。"""
+    try:
+        tgt, (tx, ty) = _deep_child_at(top_hwnd, cx, cy)
+        lp = ((ty & 0xFFFF) << 16) | (tx & 0xFFFF)
+        win32gui.PostMessage(tgt, WM_MOUSEMOVE, 0, lp)
+        time.sleep(0.02)
+        win32gui.PostMessage(tgt, WM_LBUTTONDOWN, MK_LBUTTON, lp)
+        time.sleep(0.03)
+        win32gui.PostMessage(tgt, WM_LBUTTONUP, 0, lp)
+        return True
     except Exception as exc:
-        dev_log("launcher 置前台失败", exc)
+        dev_log("后台消息点击失败", exc)
+        return False
+
+
+def _post_key(top_hwnd, vk) -> bool:
+    """后台按键:PostMessage WM_KEYDOWN/KEYUP(MaaNTE keyboard=PostMessage 同款)。发给窗口中心的最深子窗。"""
+    try:
+        l, t, r, b = win32gui.GetClientRect(top_hwnd)
+        tgt, _ = _deep_child_at(top_hwnd, (r - l) // 2, (b - t) // 2)
+        win32gui.PostMessage(tgt, WM_KEYDOWN, vk, 0x00000001)
+        time.sleep(0.03)
+        win32gui.PostMessage(tgt, WM_KEYUP, vk, 0xC0000001)
+        return True
+    except Exception as exc:
+        dev_log("后台消息按键失败", exc)
+        return False
+
+
+def _print_window_bgr(hwnd):
+    """后台截图:PrintWindow(PW_CLIENTONLY|PW_RENDERFULLCONTENT)取窗口**自身**客户区画面
+    (MaaNTE screencap=Background 同款思路)。被遮挡/无焦点也能取到真实内容;失败返回 None。"""
+    dc = mfc = mem = bmp = None
+    try:
+        l, t, r, b = win32gui.GetClientRect(hwnd)
+        w, h = r - l, b - t
+        if w <= 0 or h <= 0:
+            return None
+        dc = win32gui.GetDC(hwnd)
+        mfc = win32ui.CreateDCFromHandle(dc)
+        mem = mfc.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(mfc, w, h)
+        mem.SelectObject(bmp)
+        ok = _u32.PrintWindow(ctypes.c_void_p(hwnd), ctypes.c_void_p(mem.GetSafeHdc()), 3)  # 1|2
+        if not ok:
+            return None
+        bits = bmp.GetBitmapBits(True)
+        return np.ascontiguousarray(np.frombuffer(bits, np.uint8).reshape(h, w, 4)[:, :, :3])
+    except Exception as exc:
+        dev_log("PrintWindow 后台截图失败", exc)
+        return None
+    finally:
+        try:
+            if bmp is not None:
+                win32gui.DeleteObject(bmp.GetHandle())
+        except Exception:
+            pass
+        try:
+            if mem is not None:
+                mem.DeleteDC()
+        except Exception:
+            pass
+        try:
+            if mfc is not None:
+                mfc.DeleteDC()
+        except Exception:
+            pass
+        try:
+            if dc is not None:
+                win32gui.ReleaseDC(hwnd, dc)
+        except Exception:
+            pass
 
 
 def launch_game_exe(path):
@@ -287,6 +419,11 @@ class GameLauncher:
         self._announce_tries = 0   # 公告连续检测次数(第 1 次点 X,仍在则按 ESC 兜底)
         self._start_since = 0.0    # 「开始游戏」连续被检测到的起始时刻(用于稳定判定,0=当前没检测到)
         self._last_diag = 0.0      # 加载期诊断日志限频(记录开始游戏 ROI 实际 OCR 文字)
+        self._launcher_hwnd = 0    # 点「启动游戏」那一刻的启动器 hwnd(游戏窗口=之后出现的**不同** hwnd)
+        self._game_win_seen = False  # 点启动后是否出现过游戏窗口(新 hwnd);是→之后窗口全没/回到启动器=你退出了游戏
+        self._exit_ready = 0       # "游戏退出后回到启动器「启动游戏」"的连续确认帧数(≥2 才停,防单帧 OCR 误读)
+        self._flip = True          # 点击方式交替标记(首次=后台消息点击;同目标重试时隔次硬件兜底)
+        self._start_clicked = 0    # 已点「开始游戏」次数(点后不立即判成功,等它从画面消失才算真进了游戏)
         self._hwnd = 0
 
     # ---- 生命周期 / 守卫 ----
@@ -301,34 +438,113 @@ class GameLauncher:
         return bool(self.stop_flag)
 
     def _foreground(self) -> bool:
-        """点击守卫:当前前台就是我们锁定的游戏/启动器窗口(已置前台才点,避免点到本程序/别处)。"""
-        return bool(self._hwnd and win32gui.GetForegroundWindow() == self._hwnd)
+        """点击守卫(方案 B):允许点击的条件——
+          · 游戏/启动器就是真前台(或焦点在它的 CEF 子窗口上);或
+          · 前台是本程序/桌面(=用户点了开始在等自动启动),且目标窗口**视觉在最前**(落点上就是它)。
+        用户在用第三方程序(第三方是前台)→ 一律拦下:不抢前台、不抢鼠标。"""
+        h = self._hwnd
+        if not h:
+            return False
+        fg = win32gui.GetForegroundWindow()
+        if fg == h:
+            return True
+        if fg and _win_pid(fg) and _win_pid(fg) == _win_pid(h):   # CEF 子窗口拿着焦点 = 它就在最前
+            return True
+        if self._fg_owner_kind(fg) == "other":                    # 用户在用别的程序 → 不动
+            return False
+        return self._visible_state(h) == "top"
+
+    def _fg_owner_kind(self, fg) -> str:
+        """前台窗口归谁:'self'=本程序 / 'shell'=桌面·任务栏 / 'other'=第三方程序(用户在用,别打扰)。"""
+        if not fg:
+            return "shell"
+        pid = _win_pid(fg)
+        if pid and pid == os.getpid():
+            return "self"
+        try:
+            if win32gui.GetClassName(fg) in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+                return "shell"
+        except Exception:
+            pass
+        return "other"
+
+    def _probe_screen_pts(self, h):
+        """h 客户区上要核验"视觉最前"的屏幕采样点:客户区中心 + 两个主要点击点(启动游戏/开始游戏)。"""
+        try:
+            from winenv import client_rect_on_screen
+            x, y, w, hh = client_rect_on_screen(h)
+        except Exception as exc:
+            dev_log("取客户区屏幕矩形失败", exc)
+            return []
+        if w <= 0 or hh <= 0:
+            return []
+        return [(int(x + px * w), int(y + py * hh))
+                for px, py in ((0.5, 0.5), self.LAUNCH_BTN_PT, self.START_GAME_PT)]
+
+    def _visible_state(self, h) -> str:
+        """h 是否视觉最前:'top' 全部采样点都是它 / 'covered_self' 被本程序 GUI 挡住(可自己让开)/
+        'covered_other' 被其它窗口挡住(绝不动别人 → 只能等)。"""
+        pts = self._probe_screen_pts(h)
+        if not pts:
+            return "covered_other"
+        me = os.getpid()
+        for sx, sy in pts:
+            if _same_process_on_top(h, sx, sy):
+                continue
+            top = _top_window_at(sx, sy)
+            if top and _win_pid(top) == me:
+                return "covered_self"
+            return "covered_other"
+        return "top"
 
     def _resolve_window(self):
-        """定位窗口并返回 (状态, hwnd):
-          ('act', h)   游戏/启动器**已在前台**(你点了它)→ 截图/点击;
-          ('min', h)   最小化 → 暂停;
-          ('wait', h)  游戏在后台(前台是本程序/桌面/别的程序)→ 暂停,**绝不抢焦点**;
-          ('gone', 0)  窗口没了(用户关闭)→ 停止。
-        关键:**脚本绝不主动把游戏切回前台。只有游戏/启动器窗口自己在前台(你点了它、或启动器刚拉起自动到前台)
-        时才操作;你点本软件 / 切到桌面 / 切到别的程序 → 一律暂停,等你点回游戏窗口再继续。**"""
+        """定位窗口并返回 (状态, hwnd)——后台模式(MaaNTE 同款):
+          ('act', h)   窗口存在且未最小化 → **后台截图(PrintWindow)+ 后台消息点击(PostMessage)**,
+                       不需要前台、不动真实鼠标、不怕遮挡 —— 你可以随意点本程序看日志/用别的程序;
+          ('min', h)   最小化 → 暂停(最小化窗口常不渲染,取不到真实画面;恢复后自动继续);
+          ('gone', 0)  没有任何游戏/启动器窗口 → 交上层判(加载空窗期 / 用户关闭)。"""
         fg = win32gui.GetForegroundWindow()
-        if fg and _is_game_title(win32gui.GetWindowText(fg)):   # 游戏/启动器在前台(你点了它)→ 干活
+        if fg and _is_game_title(win32gui.GetWindowText(fg)):   # 前台恰好就是它 → 直接用
             self._hwnd = fg
             return "act", fg
         h = any_game_window()
         if not h:
             return "gone", 0
-        if win32gui.IsIconic(h):                 # 最小化 → 暂停
+        if win32gui.IsIconic(h):                 # 最小化 → 暂停(用户主动最小化,不碰它)
             return "min", h
-        return "wait", h                         # 游戏在后台 → 暂停,绝不抢焦点;你点游戏窗口它才继续
+        self._hwnd = h
+        return "act", h
 
     def _click(self, pt) -> None:
-        """点击前加 0.2-0.5s 随机延迟(拟人),再直接定位 + 立即点击(走 runtime_guard 守卫:
-        停止/前台检查 + 失败急停)。停止时跳过延迟尽快退出。"""
-        if not self.stop_flag:
-            time.sleep(random.uniform(*self.CLICK_DELAY))
-        safe_click_norm(self._hwnd, pt, self._stopped, self._foreground, self.log, 0.02)
+        """点击(后台优先,MaaNTE 同款):随机延迟(拟人)→ **PostMessage 后台消息点击**(不动真实鼠标、
+        不需要前台、不怕遮挡)。同一目标重试时(消息点击对个别控件可能无效)**交替补一次硬件点击兜底**,
+        但硬件路径只在"窗口视觉最前 + 前台不是第三方程序"时走(绝不打扰正在用别的程序的你)。
+        任何点击失败只记日志、下一轮重试,不冒致命错误。"""
+        if self.stop_flag:
+            return
+        time.sleep(random.uniform(*self.CLICK_DELAY))
+        h = self._hwnd
+        try:
+            l, t, r, b = win32gui.GetClientRect(h)
+            cw, ch = r - l, b - t
+        except Exception as exc:
+            dev_log("取客户区失败(窗口可能刚关闭)", exc)
+            return
+        if cw <= 0 or ch <= 0:
+            return
+        self._flip = not self._flip
+        if self._flip and self._foreground():
+            # 第 2/4/6…次重试且不打扰用户 → 硬件点击兜底(个别控件不吃窗口消息)
+            try:
+                safe_click_norm(h, pt, self._stopped, self._foreground, self.log, 0.02)
+                return
+            except Exception as exc:
+                dev_log("硬件点击失败(转回后台消息点击)", exc)
+        _post_click_client(h, int(pt[0] * cw), int(pt[1] * ch))
+
+    def _press_esc_bg(self) -> None:
+        """后台 ESC(PostMessage,不需要前台)。"""
+        _post_key(self._hwnd, self.VK_ESC)
 
     def _press_esc(self) -> None:
         safe_press_key(self.VK_ESC, self._stopped, self._foreground, self.log, 0.05)
@@ -450,7 +666,13 @@ class GameLauncher:
         self._driving_launcher = False
         self._announce_tries = 0
         self._start_since = 0.0
-        self.log("自动启动游戏:开始(按当前界面状态决定动作;只跑一轮,完成即停;仅前台时动作;F12 急停)")
+        self._launcher_hwnd = 0
+        self._game_win_seen = False
+        self._exit_ready = 0
+        self._flip = True
+        self._start_clicked = 0
+        self.log("自动启动游戏:开始(后台识别+后台点击:不需要前台、不动你的鼠标,"
+                 "你可随意看日志/用别的程序;只跑一轮,完成即停;F12 急停)")
         # 没有任何游戏/启动器窗口 → 本地定位启动器 exe 并拉起(不必手动开启动器);等其窗口出现再进主循环
         if not any_game_window() and not self._ensure_launcher_running():
             return self.success
@@ -468,11 +690,19 @@ class GameLauncher:
                     state, gw = self._resolve_window()
                     if state == "gone":
                         # 没有任何游戏窗口:
-                        #  · **已点过启动游戏** → 启动器关闭、游戏着色器编译期间暂时无「王者荣耀世界」窗口 = 过渡/加载
-                        #    → 一直等游戏窗口出现,**绝不当成"已关闭"而停**(着色器编译可能几十秒~几分钟)。
-                        #  · 还没点启动游戏、但之前出现过窗口 → 用户主动关了启动器 → 停止(留 CLOSE_GRACE_S 宽限)。
+                        #  · 点过启动、**游戏窗口还没出现过** → 启动器关闭→游戏进程启动/着色器编译的空窗期 = 过渡
+                        #    → 一直等游戏窗口出现,绝不当成"已关闭"而停(可能几十秒~几分钟)。
+                        #  · 点过启动、**游戏窗口出现过**,现在又全没了 → 你在编译/加载/公告中退出了游戏
+                        #    → **静默停止**(不报错、不重启);CLOSE_GRACE_S 宽限防窗口瞬断误判。
+                        #  · 没点过启动但出现过窗口 → 用户关了启动器 → 停止。
                         if self._clicked_launch:
-                            if last != "transition":
+                            if self._game_win_seen:
+                                if grace is None:
+                                    grace = time.time()
+                                if time.time() - grace > self.CLOSE_GRACE_S:
+                                    self.log("游戏窗口已消失(你在启动过程中退出了游戏)→ 自动启动结束")
+                                    return self.success
+                            elif last != "transition":
                                 self.log("启动器已关、游戏加载中…等待游戏窗口(着色器编译可能较久)")
                                 last = "transition"
                         elif self._saw_window:
@@ -488,16 +718,21 @@ class GameLauncher:
                         continue
                     grace = None
                     self._saw_window = True
-                    if state in ("min", "wait"):
-                        # min=最小化;wait=你切到了别的窗口。都暂停、不抢焦点(回到游戏/启动器窗口即自动继续)。
-                        if last != state:
-                            self.log("启动器/游戏已最小化 → 暂停(恢复后自动继续)" if state == "min"
-                                     else "你切到了其它窗口 → 暂停(回到游戏/启动器窗口后自动继续)")
-                            last = state
+                    if self._clicked_launch and self._launcher_hwnd and gw and gw != self._launcher_hwnd:
+                        self._game_win_seen = True   # 点启动后出现了**新的**王者窗口(hwnd 不同)= 游戏窗口已出现过
+                    if state == "min":
+                        # 最小化 → 暂停(最小化窗口常不渲染,后台也取不到真实画面;恢复后自动继续)
+                        if last != "min":
+                            self.log("启动器/游戏已最小化 → 暂停(恢复后自动继续)")
+                            last = "min"
                         time.sleep(0.3)
                         continue
-                    cap.hwnd = gw
-                    f = cap.grab()
+                    # 后台截图优先(PrintWindow:被遮挡/无焦点也取到窗口自身画面);
+                    # 个别窗口 PrintWindow 不支持 → 仅当它**视觉最前**时退回屏幕截图(否则会截到盖在上面的别的窗口)
+                    f = _print_window_bgr(gw)
+                    if f is None and self._visible_state(gw) == "top":
+                        cap.hwnd = gw
+                        f = cap.grab()
                     if f is None:
                         time.sleep(self.TICK)
                         continue
@@ -509,11 +744,23 @@ class GameLauncher:
                     btn, bpt = self.read_launch_button(fn)
                     if btn in ("ready", "exiting", "ingame"):
                         self._driving_launcher = True
+                    if btn != "ready":
+                        self._exit_ready = 0               # 不在「启动游戏」画面 → 退出确认计数清零
 
                     if btn == "ready":
+                        # 点过启动、游戏窗口出现过,现在又回到启动器「启动游戏」= 你退出了游戏
+                        # → 连续 2 帧确认后停止,**绝不重新启动**(2 帧防单帧 OCR 误读「启动」误停)。
+                        if self._clicked_launch and self._game_win_seen:
+                            self._exit_ready += 1
+                            if self._exit_ready >= 2:
+                                self.log("检测到游戏已退出、回到启动器 → 停止,不再重新启动")
+                                return self.success
+                            time.sleep(self.TICK)
+                            continue
                         nowt = time.time()
                         if nowt >= self._launch_cd:        # 防抖:点完 5s 内不重复点;若没点中按钮还在,到点会重试
                             self.log("启动器就绪 → 点击「启动游戏」")
+                            self._launcher_hwnd = self._hwnd   # 记录启动器 hwnd(之后出现的不同 hwnd = 游戏窗口)
                             self._click(bpt)
                             self._clicked_launch = True
                             self._launch_cd = nowt + 5.0
@@ -548,8 +795,8 @@ class GameLauncher:
                             self.log("检测到「公告」→ 点右上角 X 关闭")
                             self._click(self.CLOSE_X_PT)
                         else:
-                            self.log("公告仍在 → 按 ESC 返回")
-                            self._press_esc()
+                            self.log("公告仍在 → 按 ESC 返回(后台按键)")
+                            self._press_esc_bg()
                         time.sleep(0.8)
                         idle_count = 0
                         last = ""
@@ -557,25 +804,31 @@ class GameLauncher:
                     self._announce_tries = 0
                     sp = next(((cx, cy) for txt, cx, cy in start_lines if "开始游戏" in txt), None)
                     if sp:
-                        # 「开始游戏」要**连续稳定 START_STABLE_S 秒**才点:公告出现前会有一瞬「开始游戏」闪现,
-                        # 直接点会误触、公告随后盖上 → 任务提前结束。稳定期内若公告冒出会被上面分支接管并清零。
+                        # 「开始游戏」要**连续稳定 START_STABLE_S 秒**才点(避开公告前的瞬时闪现)。
+                        # 点后**不立即判成功**:后台消息点击对个别控件可能无效 → 等它从画面消失才算真进了游戏;
+                        # 仍在就隔 2s 重点(_click 会交替补硬件兜底,仅在不打扰你时)。
                         if self._start_since == 0.0:
                             self._start_since = time.time()
-                        if time.time() - self._start_since >= self.START_STABLE_S:
-                            self.log("检测到「开始游戏」→ 点击进入游戏")
+                        if (time.time() - self._start_since >= self.START_STABLE_S
+                                and time.time() >= self._launch_cd):
+                            self._start_clicked += 1
+                            self.log(f"检测到「开始游戏」→ 点击进入游戏(第 {self._start_clicked} 次)")
                             self._click(sp)
+                            self._launch_cd = time.time() + 2.0   # 复用防抖:2s 内不重复点
                             time.sleep(self.AFTER_CLICK_S)
-                            self.on_count(1)
-                            self.success = True
-                            self.log("已点击「开始游戏」,进入游戏完成")
-                            return True
-                        if last != "start_confirm":
+                        elif last != "start_confirm":
                             self.log("检测到「开始游戏」,稳定确认中…(避开公告前的瞬时闪现)")
                             last = "start_confirm"
                         idle_count = 0
                         time.sleep(self.TICK)
                         continue
                     self._start_since = 0.0                 # 当前没检测到开始游戏 → 清零稳定计时
+                    if self._start_clicked:
+                        # 点过「开始游戏」且它已从画面消失(且无公告)= 已进入游戏 → 成功
+                        self.on_count(1)
+                        self.success = True
+                        self.log("「开始游戏」已生效,进入游戏完成")
+                        return True
 
                     # 既无公告也无开始游戏:判断"还在流程中(等)" vs "已在游戏内"
                     start_txt = "".join(ln[0] for ln in start_lines)
