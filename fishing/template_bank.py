@@ -22,6 +22,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# 限 OpenCV 并行线程:默认=逻辑核全开(16),对每秒几百次 ~1ms 的小 ROI matchTemplate/resize
+# 纯是线程池唤醒/自旋开销,还与游戏渲染线程争核 → 帧数/低帧抖动(实测 2 线程下单次耗时几乎不变:
+# 整帧 resize 0.7→1.2ms、matchTemplate ~1ms 持平)。BetterGI/okww 同为"延迟模式、把核让给游戏"。
+cv2.setNumThreads(2)
+
 NORM_W = 1920  # 模板在 1920 宽下裁切;实时帧先归一化到此宽再匹配
 
 # 容忍 4K 模板 vs 实测 HUD 缩放差异的默认尺度集
