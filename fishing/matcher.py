@@ -29,11 +29,32 @@ _QTY_RE = re.compile(r"[x×X*]\s*[0-9]")
 _OCR = None
 
 
+def _limit_ocr_threads() -> None:
+    """把 RapidOCR 三个 onnxruntime 会话的 intra 线程压到 2(默认=物理核数;OCR 每秒才几次、
+    延迟不敏感,却和游戏渲染争核 → 掉帧)。本机 rapidocr 老版不暴露线程参数 → 在**构造前**把
+    其模块里的 SessionOptions 换成"预设线程上限"的工厂(不动 site-packages);结构不认识/出错
+    则原样回退——识别行为完全不变,只是少了线程上限。"""
+    try:
+        import rapidocr_onnxruntime.utils as _ru
+        from onnxruntime import SessionOptions as _SO
+        if getattr(_ru, "SessionOptions", None) is not _SO:
+            return                       # 已打过补丁 / 未知版本结构 → 不动
+        def _capped(*a, **k):
+            so = _SO(*a, **k)
+            so.intra_op_num_threads = 2
+            so.inter_op_num_threads = 1
+            return so
+        _ru.SessionOptions = _capped     # OrtInferSession 按模块名晚绑定取用 → 生效
+    except Exception:
+        pass
+
+
 def _get_ocr():
     """惰性加载中文 OCR(首次约 1-2s)。"""
     global _OCR
     if _OCR is None:
         from rapidocr_onnxruntime import RapidOCR
+        _limit_ocr_threads()             # 须在 RapidOCR() 建会话之前
         _OCR = RapidOCR()
     return _OCR
 
