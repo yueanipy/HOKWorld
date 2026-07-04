@@ -35,13 +35,10 @@ class GameCapture:
     def __init__(self, hwnd: int) -> None:
         self.hwnd = hwnd
         self.mode = "bitblt"
-        self._w = 0
-        self._h = 0
         self._desktop = None
         self._src_dc = None        # 桌面窗口 DC 句柄
         self._mfc = None           # 桌面 DC(win32ui 包装)
-        self._mem = None           # 兼容内存 DC
-        self._bmp = None           # 兼容位图
+        self._res = {}             # (w,h) -> (内存 DC, 兼容位图):按尺寸缓存复用
         self._last: np.ndarray | None = None
         self._canvas: np.ndarray | None = None   # 区域截图复用的归一化黑底画布
 
@@ -58,25 +55,33 @@ class GameCapture:
         dev_log("capture: 启用 GDI BitBlt(SRCCOPY,无 CAPTUREBLT;无黄框、无闪烁、全界面稳定)")
         return self.mode
 
-    def _ensure(self, w: int, h: int) -> None:
-        """按目标尺寸建好(并复用)桌面 DC / 内存 DC / 位图;尺寸变了才重建。"""
-        if self._mem is not None and (w, h) == (self._w, self._h):
-            return
-        self._free()
-        self._desktop = win32gui.GetDesktopWindow()
-        self._src_dc = win32gui.GetWindowDC(self._desktop)
-        self._mfc = win32ui.CreateDCFromHandle(self._src_dc)
-        self._mem = self._mfc.CreateCompatibleDC()
-        self._bmp = win32ui.CreateBitmap()
-        self._bmp.CreateCompatibleBitmap(self._mfc, w, h)
-        self._mem.SelectObject(self._bmp)
-        self._w, self._h = w, h
+    def _ensure(self, w: int, h: int):
+        """取(并按尺寸缓存)兼容内存 DC / 位图;桌面 DC 各尺寸共用。
+        实时检测每 tick 交替截几个**不同尺寸**的小区域(如剧情:右上控制簇 + 确认框区),
+        按尺寸缓存才不会逐次销毁重建 DC/位图。返回 (mem_dc, bmp)。"""
+        pair = self._res.get((w, h))
+        if pair is not None:
+            return pair
+        if self._mfc is None:
+            self._desktop = win32gui.GetDesktopWindow()
+            self._src_dc = win32gui.GetWindowDC(self._desktop)
+            self._mfc = win32ui.CreateDCFromHandle(self._src_dc)
+        if len(self._res) >= 8:    # 窗口缩放会产生新尺寸;条目过多整体重建,防 GDI 句柄堆积
+            self._free()
+            return self._ensure(w, h)
+        mem = self._mfc.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(self._mfc, w, h)
+        mem.SelectObject(bmp)
+        pair = (mem, bmp)
+        self._res[(w, h)] = pair
+        return pair
 
     def _blit(self, rx: int, ry: int, rw: int, rh: int) -> np.ndarray:
         """BitBlt 屏幕矩形 (rx,ry,rw,rh) → BGR(rh×rw×3)视图。只用 SRCCOPY(无 CAPTUREBLT → 不闪)。"""
-        self._ensure(rw, rh)
-        self._mem.BitBlt((0, 0), (rw, rh), self._mfc, (rx, ry), win32con.SRCCOPY)
-        bits = self._bmp.GetBitmapBits(True)                   # BGRA(top-down)
+        mem, bmp = self._ensure(rw, rh)
+        mem.BitBlt((0, 0), (rw, rh), self._mfc, (rx, ry), win32con.SRCCOPY)
+        bits = bmp.GetBitmapBits(True)                         # BGRA(top-down)
         return np.frombuffer(bits, np.uint8).reshape(rh, rw, 4)[:, :, :3]
 
     def grab(self) -> np.ndarray | None:
@@ -95,7 +100,9 @@ class GameCapture:
     def grab_region_canvas(self, roi) -> np.ndarray | None:
         """**只截**客户区 roi=(x0,y0,x1,y1)(归一化)子区域,贴回一张 1920 宽归一化黑底画布的对应位置后返回。
         对识别器等价于"整帧归一化",但只 BitBlt 了一小块、省掉绝大部分拷贝(4K 全屏 ~60ms → 一小块 ~7ms)。
-        要求 roi 覆盖该识别器用到的全部 ROI(画布其余处为黑、不参与匹配)。"""
+        要求 roi 覆盖该识别器用到的全部 ROI(画布其余处为黑、不参与匹配)。
+        画布跨调用复用:同一 tick 连续截多个小区域(如剧情:右上控制簇 + 确认框区)会**叠加**贴到
+        同一画布 → 比截一个大并集更省;识别器只读"本 tick 刚贴过"的 ROI 即可保证新鲜。"""
         x, y, w, h = client_rect_on_screen(self.hwnd)
         if w <= 0 or h <= 0:
             return self._canvas
@@ -120,16 +127,16 @@ class GameCapture:
         return self._canvas
 
     def _free(self) -> None:
-        try:
-            if self._bmp is not None:
-                win32gui.DeleteObject(self._bmp.GetHandle())
-        except Exception:
-            pass
-        try:
-            if self._mem is not None:
-                self._mem.DeleteDC()
-        except Exception:
-            pass
+        for mem, bmp in self._res.values():
+            try:
+                win32gui.DeleteObject(bmp.GetHandle())
+            except Exception:
+                pass
+            try:
+                mem.DeleteDC()
+            except Exception:
+                pass
+        self._res = {}
         try:
             if self._mfc is not None:
                 self._mfc.DeleteDC()
@@ -140,8 +147,7 @@ class GameCapture:
                 win32gui.ReleaseDC(self._desktop, self._src_dc)
         except Exception:
             pass
-        self._mem = self._mfc = self._bmp = self._src_dc = None
-        self._w = self._h = 0
+        self._mfc = self._src_dc = None
 
     def stop(self) -> None:
         self._free()
