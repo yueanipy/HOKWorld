@@ -1,7 +1,7 @@
 """单一版本与应用元信息来源。GUI、安装器、更新检查、发布版本都从这里取值,避免各处版本号漂移。"""
 from __future__ import annotations
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 # 应用标识
 APP_NAME = "HOKWorld"                  # 可执行文件名 / 窗口标题主名
