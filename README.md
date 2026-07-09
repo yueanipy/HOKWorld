@@ -25,7 +25,7 @@ python app.py
 
 ## 配置与名单(都存程序目录 `data\`)
 
-配置、日志、采集黑/白名单都写在**程序目录下的 `data\`**(`config.json`、`blacklist.txt`、`whitelist.txt`、`logs\hokworld.log` 等)——随程序。`data\` 不在安装器的文件清单里，**卸载**时(cmd + control控制面板或点击 uninstall)才连同程序一起清干净。
+配置、日志、采集黑/白名单都写在**程序目录下的 `data\`**(`config.json`、`blacklist.txt`、`whitelist.txt`、`logs\hokworld.log` 等)——随程序。`data\` 不在安装器的文件清单里，**卸载**(cmd + control控制面板或点击 uninstall)会连同程序一起清干净。
 
 ## 自动钓鱼
 
