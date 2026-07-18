@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "map": "surface",
+  "source_session": "20260716_173207",
+  "extension": {
+    "session": "20260716_172144",
+    "anchor_frame": "000935_100.117.jpg",
+    "anchor_time": 100.1169,
+    "tracked_frames": 211
+  },
+  "frame_size": [
+    1920,
+    1080
+  ],
+  "map_roi": [
+    0.08,
+    0.1,
+    0.85,
+    0.84
+  ],
+  "tracked_frames": 348,
+  "keyframes": 44,
+  "features": 70400,
+  "target_count": 87,
+  "normal_targets": 74,
+  "regional_targets": 13,
+  "source_to_atlas": [
+    [
+      0.010012685191907374,
+      -1.815182569437347e-05,
+      -3951.5909480122177
+    ],
+    [
+      -3.985275058312739e-05,
+      0.010024236789137175,
+      6285.969600610518
+    ]
+  ],
+  "calibration": {
+    "ocr": {
+      "anchors": 40,
+      "inliers": 17,
+      "median_error_px": 62.946,
+      "max_inlier_error_px": 97.157,
+      "anchor_names": [
+        "丰云野",
+        "丰谷道",
+        "云下津",
+        "云根镇",
+        "云镜湖",
+        "凄莫林地",
+        "古丘城",
+        "后山禁院",
+        "安虞野",
+        "幽径城",
+        "幽翠径",
+        "归陵",
+        "攀云塔",
+        "无类崖",
+        "春潭湿地",
+        "机关学院",
+        "武道学院",
+        "沧浪洞",
+        "浮梦集",
+        "溯洄营地",
+        "演星原",
+        "潭影营地",
+        "烟痕谷",
+        "百冶山",
+        "百草园",
+        "百鸣港",
+        "盼归谷",
+        "穿云峡间",
+        "篱遁丘",
+        "翠箩野",
+        "落云崖",
+        "藏云谷",
+        "藏兵城",
+        "虎啸堂",
+        "迷津洞",
+        "阑珊丘",
+        "隐逸村",
+        "霞隐坡",
+        "魔道学院",
+        "龙闻营地"
+      ]
+    },
+    "named_icons": {
+      "anchors": 34,
+      "inliers": 30,
+      "median_error_px": 4.128,
+      "max_inlier_error_px": 21.51,
+      "anchor_names": [
+        "丰云野",
+        "丰谷道",
+        "云根镇",
+        "云镜湖",
+        "后山禁院",
+        "安虞野",
+        "幽翠径",
+        "归陵",
+        "攀云塔",
+        "无类崖",
+        "春潭湿地",
+        "机关学院",
+        "武道学院",
+        "沧浪洞",
+        "浮梦集",
+        "溯洄营地",
+        "演星原",
+        "潭影营地",
+        "烟痕谷",
+        "百冶山",
+        "百草园",
+        "百鸣港",
+        "盼归谷",
+        "穿云峡间",
+        "篱遁丘",
+        "翠箩野",
+        "藏云谷",
+        "藏兵城",
+        "虎啸堂",
+        "迷津洞",
+        "阑珊丘",
+        "隐逸村",
+        "霞隐坡",
+        "魔道学院"
+      ],
+      "fallback_to_ocr": false
+    },
+    "drift": {
+      "pair_observations": 399,
+      "anchor_frames": 162,
+      "corrected_frames": 348,
+      "max_correction_px": 218.297
+    },
+    "icons": {
+      "stable_icon_clusters": 175,
+      "within_20px": 66,
+      "within_40px": 66,
+      "within_80px": 69,
+      "median_nearest_px": 3.32,
+      "max_nearest_px": 427.189
+    }
+  },
+  "excluded": [
+    "underground",
+    "activity_colored",
+    "question_mark",
+    "fish"
+  ]
+}
