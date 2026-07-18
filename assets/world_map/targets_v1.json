@@ -1,0 +1,1398 @@
+{
+  "schema": 1,
+  "map": "surface",
+  "targets": [
+    {
+      "id": 1101000032,
+      "name": "春溪原",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "CXY-North",
+      "source": [
+        566284.4375,
+        -500727.21875
+      ],
+      "atlas": [
+        1727.526,
+        1243.9934
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000033,
+      "name": "无名雕像",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        551100.5,
+        -456050.9375
+      ],
+      "atlas": [
+        1574.683,
+        1692.4441
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000034,
+      "name": "鹤鸣馆",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        611586.9375,
+        -455691.125
+      ],
+      "atlas": [
+        2180.3082,
+        1693.6404
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000035,
+      "name": "春幽水潭",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        548405.8125,
+        -427332.40625
+      ],
+      "atlas": [
+        1547.1807,
+        1980.4329
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000036,
+      "name": "迷津洞",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        526371.0625,
+        -455744.71875
+      ],
+      "atlas": [
+        1327.0694,
+        1696.4993
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000037,
+      "name": "百鸣港",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        583645.3125,
+        -499506.3125
+      ],
+      "atlas": [
+        1901.3328,
+        1255.5402
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000038,
+      "name": "溯洄营地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        563286.4375,
+        -447952.8125
+      ],
+      "atlas": [
+        1696.55,
+        1773.136
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000039,
+      "name": "古丘城",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        551309.6875,
+        -401218.625
+      ],
+      "atlas": [
+        1575.7822,
+        2242.0879
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000040,
+      "name": "春潭湿地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        595306.6875,
+        -440221.25
+      ],
+      "atlas": [
+        2017.0183,
+        1849.3629
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000041,
+      "name": "千帆角",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        658233.3125,
+        -476550.90625
+      ],
+      "atlas": [
+        2647.7423,
+        1482.6781
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101000042,
+      "name": "篱遁丘",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-North",
+      "source": [
+        498905.90625,
+        -475242.03125
+      ],
+      "atlas": [
+        1052.4233,
+        1502.1482
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002915,
+      "name": "沧浪洞",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        657102.5,
+        -429037.6875
+      ],
+      "atlas": [
+        2635.5573,
+        1959.0069
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002916,
+      "name": "春溪古战场",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "CXY-South",
+      "source": [
+        585340.25,
+        -405061.3125
+      ],
+      "atlas": [
+        1916.5893,
+        2202.2117
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002917,
+      "name": "凄莫林地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        607976.3125,
+        -417102.75
+      ],
+      "atlas": [
+        2143.4556,
+        2080.6033
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002918,
+      "name": "幽径城",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        590779.75,
+        -371878.6875
+      ],
+      "atlas": [
+        1970.451,
+        2534.6254
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002919,
+      "name": "云下津",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        534495.9375,
+        -350362.15625
+      ],
+      "atlas": [
+        1406.5083,
+        2752.5553
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002920,
+      "name": "穿云峡间",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        489498.6875,
+        -308723.28125
+      ],
+      "atlas": [
+        955.2092,
+        3171.7465
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101002921,
+      "name": "翠箩野",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "CXY-South",
+      "source": [
+        649997.0625,
+        -382818.5
+      ],
+      "atlas": [
+        2563.5739,
+        2422.6021
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101004256,
+      "name": "龙旗谷",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "LYG",
+      "source": [
+        426687.125,
+        -414277.78125
+      ],
+      "atlas": [
+        328.2128,
+        2116.1464
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101004257,
+      "name": "龙闻营地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "LYG",
+      "source": [
+        432656.1875,
+        -381134.34375
+      ],
+      "atlas": [
+        387.3775,
+        2448.1462
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101004258,
+      "name": "沉碑潭侧",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "LYG",
+      "source": [
+        403575.75,
+        -374785.125
+      ],
+      "atlas": [
+        96.089,
+        2512.9512
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005085,
+      "name": "梦语湖",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "MYH",
+      "source": [
+        434154.09375,
+        -605229.0625
+      ],
+      "atlas": [
+        406.4433,
+        201.7079
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005086,
+      "name": "萦梦小径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        464386.96875,
+        -598205.9375
+      ],
+      "atlas": [
+        709.0281,
+        270.9045
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005087,
+      "name": "渡梦汀",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        451155.0625,
+        -572349.25
+      ],
+      "atlas": [
+        576.0718,
+        530.6254
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005088,
+      "name": "梦回深谷",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        417032.4375,
+        -590033.125
+      ],
+      "atlas": [
+        234.7337,
+        354.718
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005089,
+      "name": "沉梦岛",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        424998.21875,
+        -611610.125
+      ],
+      "atlas": [
+        314.8843,
+        138.1075
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005090,
+      "name": "浮梦集",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        473345.34375,
+        -577913.0
+      ],
+      "atlas": [
+        798.3571,
+        473.9687
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005091,
+      "name": "暮山岩",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        388674.8125,
+        -610221.4375
+      ],
+      "atlas": [
+        -48.8358,
+        153.4757
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101005092,
+      "name": "觅梦崖",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "MYH",
+      "source": [
+        451532.0,
+        -625259.375
+      ],
+      "atlas": [
+        580.8064,
+        0.2268
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006192,
+      "name": "观星群山",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        307018.5625,
+        -468263.5
+      ],
+      "atlas": [
+        -869.0109,
+        1579.7499
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006193,
+      "name": "幽翠径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        275525.25,
+        -488079.9375
+      ],
+      "atlas": [
+        -1183.9838,
+        1382.3603
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006194,
+      "name": "烟痕谷",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        363743.53125,
+        -454991.0625
+      ],
+      "atlas": [
+        -301.2826,
+        1710.5353
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006195,
+      "name": "迎野苑",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        310602.09375,
+        -515158.0
+      ],
+      "atlas": [
+        -832.2789,
+        1109.5255
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006196,
+      "name": "炼魄崖",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        265900.78125,
+        -518872.46875
+      ],
+      "atlas": [
+        -1279.7917,
+        1074.0722
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101006197,
+      "name": "演星原",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-GuanXingTai",
+      "source": [
+        328516.625,
+        -442653.125
+      ],
+      "atlas": [
+        -654.2224,
+        1835.6176
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008072,
+      "name": "稷下学院",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        228752.0,
+        -544309.1875
+      ],
+      "atlas": [
+        -1651.289,
+        820.569
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008073,
+      "name": "武道学院",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        209253.15625,
+        -562252.4375
+      ],
+      "atlas": [
+        -1846.1991,
+        641.4787
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008074,
+      "name": "魔道学院",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        222007.890625,
+        -524191.90625
+      ],
+      "atlas": [
+        -1719.1808,
+        1022.4982
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008075,
+      "name": "机关学院",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        236866.65625,
+        -570323.625
+      ],
+      "atlas": [
+        -1569.5673,
+        559.4707
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008076,
+      "name": "善生庭",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        199133.859375,
+        -552667.5
+      ],
+      "atlas": [
+        -1947.6944,
+        737.9637
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008077,
+      "name": "后山禁院",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        198702.796875,
+        -523246.4375
+      ],
+      "atlas": [
+        -1952.5445,
+        1032.9046
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008078,
+      "name": "争鸣厅",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-JiXiaXueYuan",
+      "source": [
+        222327.75,
+        -554337.0625
+      ],
+      "atlas": [
+        -1715.4309,
+        720.3033
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008667,
+      "name": "秘禁之地",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "SQ-MiJinGe",
+      "source": [
+        313838.875,
+        -582478.5
+      ],
+      "atlas": [
+        -798.648,
+        434.5598
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008668,
+      "name": "虎啸堂",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-MiJinGe",
+      "source": [
+        301862.25,
+        -538998.1875
+      ],
+      "atlas": [
+        -919.3555,
+        870.8941
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008669,
+      "name": "霞隐坡",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-MiJinGe",
+      "source": [
+        336649.71875,
+        -560242.5625
+      ],
+      "atlas": [
+        -570.6539,
+        656.5491
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008670,
+      "name": "秘禁阁",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-MiJinGe",
+      "source": [
+        289707.875,
+        -584460.8125
+      ],
+      "atlas": [
+        -1040.2282,
+        415.6504
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101008671,
+      "name": "无类崖",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-MiJinGe",
+      "source": [
+        268770.46875,
+        -570435.875
+      ],
+      "atlas": [
+        -1250.1224,
+        557.0741
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101009522,
+      "name": "奇门秘境",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "SQ-QiMenShuiXie",
+      "source": [
+        271279.15625,
+        -431199.9375
+      ],
+      "atlas": [
+        -1227.5311,
+        1952.7081
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101009523,
+      "name": "墨焰阁",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QiMenShuiXie",
+      "source": [
+        299124.25,
+        -398980.3125
+      ],
+      "atlas": [
+        -949.3118,
+        2274.5755
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101009524,
+      "name": "百冶山",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QiMenShuiXie",
+      "source": [
+        210807.0625,
+        -493748.09375
+      ],
+      "atlas": [
+        -1831.8838,
+        1328.1206
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101009525,
+      "name": "居梦谷",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QiMenShuiXie",
+      "source": [
+        222873.96875,
+        -450164.28125
+      ],
+      "atlas": [
+        -1711.8528,
+        1764.5341
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101009526,
+      "name": "归云径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QiMenShuiXie",
+      "source": [
+        209245.109375,
+        -447439.78125
+      ],
+      "atlas": [
+        -1848.3637,
+        1792.3883
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010809,
+      "name": "稷下前山",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        354076.46875,
+        -544866.3125
+      ],
+      "atlas": [
+        -396.4444,
+        809.9897
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010810,
+      "name": "潭影营地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        347254.4375,
+        -520504.375
+      ],
+      "atlas": [
+        -465.1935,
+        1054.4715
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010811,
+      "name": "千峰关",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        397963.84375,
+        -559999.0
+      ],
+      "atlas": [
+        43.2607,
+        656.5471
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010812,
+      "name": "安虞野",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        369557.21875,
+        -587171.0625
+      ],
+      "atlas": [
+        -240.6726,
+        385.3
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010813,
+      "name": "碧苔丘",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        375360.46875,
+        -562570.0
+      ],
+      "atlas": [
+        -183.0131,
+        631.6756
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101010814,
+      "name": "登山小径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "SQ-QianShan",
+      "source": [
+        414290.5625,
+        -536808.8125
+      ],
+      "atlas": [
+        206.3141,
+        888.3603
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101012197,
+      "name": "界北",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "YUNGEN",
+      "source": [
+        494560.4375,
+        -528007.375
+      ],
+      "atlas": [
+        1009.8713,
+        973.3891
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101012198,
+      "name": "秋水村",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "YUNGEN",
+      "source": [
+        519709.125,
+        -507136.0
+      ],
+      "atlas": [
+        1261.2984,
+        1181.6064
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101012199,
+      "name": "云根镇",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "YUNGEN",
+      "source": [
+        504289.5625,
+        -546016.1875
+      ],
+      "atlas": [
+        1107.6129,
+        792.4767
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101012200,
+      "name": "云根镇云舟栈",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "YUNGEN",
+      "source": [
+        470611.59375,
+        -537736.0625
+      ],
+      "atlas": [
+        770.2557,
+        876.8208
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101012201,
+      "name": "梦饮茶肆",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "YUNGEN",
+      "source": [
+        531273.5625,
+        -543231.4375
+      ],
+      "atlas": [
+        1377.7446,
+        819.3163
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013098,
+      "name": "映暮亭",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        615130.0,
+        -321358.4375
+      ],
+      "atlas": [
+        2213.3453,
+        3040.0819
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013099,
+      "name": "霞光小径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        543589.3125,
+        -292039.5
+      ],
+      "atlas": [
+        1496.4988,
+        3336.833
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013100,
+      "name": "东云落高地",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "Yunluo-East",
+      "source": [
+        521444.6875,
+        -298058.25
+      ],
+      "atlas": [
+        1274.8809,
+        3277.3821
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013101,
+      "name": "藏兵城",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        479628.71875,
+        -283911.0625
+      ],
+      "atlas": [
+        855.9339,
+        3420.8634
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013102,
+      "name": "隐逸村",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        621638.5625,
+        -288831.0625
+      ],
+      "atlas": [
+        2277.9231,
+        3365.8846
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013103,
+      "name": "淡烟林",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        494416.1875,
+        -276930.875
+      ],
+      "atlas": [
+        1003.8695,
+        3490.2451
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013104,
+      "name": "丹染坡",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        641714.5,
+        -266929.25
+      ],
+      "atlas": [
+        2478.5396,
+        3584.6335
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013105,
+      "name": "归陵",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        561368.8125,
+        -278112.40625
+      ],
+      "atlas": [
+        1674.2665,
+        3475.7329
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013106,
+      "name": "落云崖",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        455790.25,
+        -261576.390625
+      ],
+      "atlas": [
+        616.8414,
+        3645.7014
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013107,
+      "name": "阑珊丘",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        545970.125,
+        -312904.75
+      ],
+      "atlas": [
+        1520.7158,
+        3127.5799
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101013108,
+      "name": "盼归谷",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-East",
+      "source": [
+        578692.75,
+        -305834.25
+      ],
+      "atlas": [
+        1848.2288,
+        3197.1522
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015457,
+      "name": "西云落高地",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "Yunluo-West",
+      "source": [
+        496980.28125,
+        -423666.96875
+      ],
+      "atlas": [
+        1032.2065,
+        2019.2256
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015458,
+      "name": "云镜湖",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        483966.59375,
+        -372119.15625
+      ],
+      "atlas": [
+        900.9688,
+        2536.4717
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015459,
+      "name": "崖半营地",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        440202.0,
+        -321724.84375
+      ],
+      "atlas": [
+        461.853,
+        3043.3803
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015460,
+      "name": "霜云镇云舟栈",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        461941.6875,
+        -412979.0
+      ],
+      "atlas": [
+        681.1821,
+        2127.7607
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015461,
+      "name": "藏云谷",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        463368.75,
+        -336410.28125
+      ],
+      "atlas": [
+        694.0809,
+        2895.2468
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015462,
+      "name": "藏云北径",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        461282.53125,
+        -377681.5
+      ],
+      "atlas": [
+        673.9414,
+        2481.6174
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101015463,
+      "name": "赤隼馆",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "Yunluo-West",
+      "source": [
+        494469.59375,
+        -351092.03125
+      ],
+      "atlas": [
+        1005.7504,
+        2746.834
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016711,
+      "name": "丰谷道",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "ZMY",
+      "source": [
+        472660.21875,
+        -440674.9375
+      ],
+      "atlas": [
+        789.0061,
+        1849.7029
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016712,
+      "name": "攀云塔",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "ZMY",
+      "source": [
+        417692.125,
+        -503707.1875
+      ],
+      "atlas": [
+        239.772,
+        1220.0433
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016713,
+      "name": "百草园",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "ZMY",
+      "source": [
+        400057.3125,
+        -441682.75
+      ],
+      "atlas": [
+        62.0743,
+        1842.4937
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016714,
+      "name": "织梦原",
+      "kind": "regional",
+      "category": "区域传送点",
+      "region": "ZMY",
+      "source": [
+        440052.375,
+        -451619.40625
+      ],
+      "atlas": [
+        462.7127,
+        1741.2924
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016715,
+      "name": "丰云野",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "ZMY",
+      "source": [
+        471750.0,
+        -480313.96875
+      ],
+      "atlas": [
+        780.6119,
+        1452.3881
+      ],
+      "calibration": "affine"
+    },
+    {
+      "id": 1101016716,
+      "name": "见鲲石",
+      "kind": "normal",
+      "category": "常规传送点",
+      "region": "ZMY",
+      "source": [
+        383761.0,
+        -498008.84375
+      ],
+      "atlas": [
+        -100.0731,
+        1278.5171
+      ],
+      "calibration": "affine"
+    }
+  ]
+}
