@@ -1,25 +1,32 @@
-"""用户配置:JSON 存于 %LOCALAPPDATA%\\HOKWorldScript\\config.json(覆盖更新 / 换机更新都保留)。
-
-目前仅「时序抖动」。不再有「演练 / 真实输入」总开关——它们会**静默关掉游戏操作**(识别到却不按),
-易被误当作脚本失灵;现在脚本一律真实操作。采集黑/白名单同样存用户目录,更新不丢。
-"""
+'用户配置:设置页开关与本地路径。'
 from __future__ import annotations
 
 import copy
 import json
 from pathlib import Path
 
-from paths import config_path
+from runtime_guard import atomic_write_json, dev_log
 
 DEFAULTS = {
-    "timing_jitter": False,          # 时序/位移随机抖动(默认关闭)
-    "game_path": "",                 # 《王者荣耀世界》启动器 exe 路径;留空=自动定位(注册表/开始菜单);自动找不到时手填
+    "timing_jitter": False,           
+    "monthly_card_enabled": True,     
+    "game_path": "",                  
 }
+
+
+def user_data_dir() -> Path:
+    '返回发布版用户数据目录。'
+    from paths import user_data_dir as paths_user_data_dir
+    return paths_user_data_dir()
+
+
+def _config_path() -> Path:
+    return user_data_dir() / "config.json"
 
 
 class Config:
     def __init__(self, path: Path | None = None) -> None:
-        self._path = Path(path) if path else config_path()
+        self._path = Path(path) if path else _config_path()
         self._d = copy.deepcopy(DEFAULTS)
         self.load()
 
@@ -28,7 +35,8 @@ class Config:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return
-        except Exception:
+        except Exception as exc:
+            dev_log(f"配置读取失败,使用默认值: {self._path}", exc)
             return
         if isinstance(raw, dict):
             for k in DEFAULTS:
@@ -37,11 +45,9 @@ class Config:
 
     def save(self) -> None:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
-                json.dumps(self._d, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+            atomic_write_json(self._path, self._d)
+        except Exception as exc:
+            dev_log(f"配置保存失败: {self._path}", exc)
 
     def get(self, key: str):
         return self._d.get(key, DEFAULTS.get(key))
@@ -55,5 +61,5 @@ class Config:
         return bool(self._d.get("timing_jitter"))
 
 
-# 进程内单例:UI 改设置后 save();各任务线程启动时读取一次。
+
 cfg = Config()
