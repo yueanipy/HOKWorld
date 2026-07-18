@@ -1,8 +1,4 @@
-"""统一应用日志:所有软件状态(启动、任务进度、识别结果、更新事件、异常)集中写入
-%LOCALAPPDATA%\\HOKWorldScript\\logs\\hokworld.log。带轮转,避免无限增长。
-
-GUI 里出现的每条状态行都会同时落到这里;无论是否开发模式都记录,便于他人反馈问题。
-"""
+'统一应用日志:所有软件状态(启动、任务进度、识别结果、更新事件、异常)集中写入。'
 from __future__ import annotations
 
 import logging
@@ -35,7 +31,7 @@ def get_logger() -> logging.Logger:
 
 
 def log(msg: str, level: int = logging.INFO) -> None:
-    """记录一条状态。异常绝不外抛(日志失败不应影响主流程)。"""
+    '记录一条状态。'
     try:
         get_logger().log(level, msg)
     except Exception:
