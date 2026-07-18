@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "map": "surface",
+  "targets": [
+    {
+      "id": -1001,
+      "name": "荣耀塔",
+      "kind": "poi",
+      "category": "青色传送地点列表",
+      "region": "CXY",
+      "source": [
+        628329.9,
+        -607171.3
+      ],
+      "atlas": [
+        2350.7,
+        174.5
+      ],
+      "calibration": "session_20260716_001156_teleport_icon_sift"
+    }
+  ]
+}
