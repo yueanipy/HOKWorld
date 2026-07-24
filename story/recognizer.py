@@ -7,7 +7,9 @@ import cv2
 import numpy as np
 
 from fishing.matcher import _get_ocr
-from fishing.template_bank import PREPROCESS, TemplateBank, crop
+from fishing.template_bank import (
+    TemplateBank, crop, match_prepared_scales, preprocess_crop,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -29,6 +31,7 @@ ROI_CONFIRM = (0.40, 0.58, 0.80, 0.84)
 ROI_DLG_TITLE = (0.30, 0.26, 0.70, 0.46)  
 ROI_OPT_TEXT = (0.63, 0.34, 0.98, 0.80) 
                                         
+
 
 
 
@@ -56,6 +59,7 @@ MIN_CONF = 0.45
 MIN_OPT_LEN = 2     
 
 EXIT_WORDS = ("再见", "退出", "离开", "结束对话")  
+BAR_SIGNATURE_SIZE = (64, 20)
 
 
 class StoryRecognizer:
@@ -83,17 +87,16 @@ class StoryRecognizer:
         h, w = f_norm.shape[:2]
         x0, y0, _, _ = t.roi
         ox, oy = int(x0 * w), int(y0 * h)
-        sub = PREPROCESS[t.pre](crop(f_norm, t.roi))
-        tpl = t.tpl
-        if sub is None or sub.size == 0 or tpl.size == 0:
+        sub = preprocess_crop(f_norm, t.roi, t.pre)
+        if sub is None or sub.size == 0 or not t.prepared:
             return (0.0, None, None)
         sh, sw = sub.shape[:2]
         best = (0.0, None, None)
-        for s in t.scales:
-            th, tw = int(tpl.shape[0] * s), int(tpl.shape[1] * s)
-            if th < 8 or tw < 8 or th > sh or tw > sw:
+        for scaled_tpl, _ in t.prepared:
+            th, tw = scaled_tpl.shape[:2]
+            if th > sh or tw > sw:
                 continue
-            r = cv2.matchTemplate(sub, cv2.resize(tpl, (tw, th)), cv2.TM_CCOEFF_NORMED)
+            r = cv2.matchTemplate(sub, scaled_tpl, cv2.TM_CCOEFF_NORMED)
             _, mx, _, mxloc = cv2.minMaxLoc(r)
             if mx > best[0]:
                 cx = (ox + mxloc[0] + tw / 2) / w
@@ -132,20 +135,28 @@ class StoryRecognizer:
         out.sort(key=lambda e: e[2])
         return out
 
-    def classify(self, frame: np.ndarray):
+    def classify(self, frame: np.ndarray, *, check_confirm: bool = True):
         '纯模板、快(无 OCR ~15-35ms),把当前帧归到一个粗状态 + 点击点。'
         if not self.ready:
             return ("idle", None)
         f = self.bank.norm(frame)
-        cs, cx, cy = self._locate("confirm_skip", f)
-        if cs >= TH_CONFIRM:
-            return ("confirm", (cx, cy))
+        if check_confirm:
+            cs, cx, cy = self._locate("confirm_skip", f)
+            if cs >= TH_CONFIRM:
+                return ("confirm", (cx, cy))
         
         
         
         
         
-        if self._score("kc_f9", f) >= GATE_LO or self._score("kc_esc", f) >= GATE_LO:
+        f9 = self.bank._t["kc_f9"]
+        esc = self.bank._t["kc_esc"]
+        tr_f9 = preprocess_crop(f, f9.roi, f9.pre)
+        if match_prepared_scales(tr_f9, f9.prepared) >= GATE_LO:
+            return ("gate", None)
+        tr_esc = tr_f9 if (esc.roi == f9.roi and esc.pre == f9.pre) else preprocess_crop(
+            f, esc.roi, esc.pre)
+        if match_prepared_scales(tr_esc, esc.prepared) >= GATE_LO:
             return ("gate", None)
         return ("idle", None)
 
@@ -175,6 +186,27 @@ class StoryRecognizer:
         if ("抓拍" in txt) or ("不可" in txt and "跳过" in txt):
             return "story"
         return "none"
+
+    def bar_visual_signature(self, frame: np.ndarray) -> np.ndarray:
+        '生成右上控制条的低成本亮白 UI 特征。'
+        f = self.bank.norm(frame)
+        sub = crop(f, ROI_TR)
+        if sub is None or sub.size == 0:
+            return np.empty((0, 0), np.uint8)
+        hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
+        signature = np.where(
+            (hsv[:, :, 2] >= 175) & (hsv[:, :, 1] <= 100), 255, 0).astype(np.uint8)
+        return cv2.resize(signature, BAR_SIGNATURE_SIZE, interpolation=cv2.INTER_AREA)
+
+    @staticmethod
+    def bar_visual_change(before: np.ndarray | None, after: np.ndarray | None) -> float:
+        '返回两个控制条特征的平均绝对变化。'
+        if before is None or after is None or before.size == 0 or after.size == 0:
+            return float("inf")
+        if before.shape != after.shape:
+            return float("inf")
+        delta = np.abs(before.astype(np.int16) - after.astype(np.int16))
+        return float(delta.mean())
 
     def is_skip_dialog(self, frame: np.ndarray) -> bool:
         'OCR 复核确认框标题含「本段」(是否跳过本段剧情)。'
