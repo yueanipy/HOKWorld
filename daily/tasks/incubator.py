@@ -15,6 +15,11 @@ from daily.tasks._field import FieldTask
 class IncubatorTask(FieldTask):
     task_id = "incubator"
     name = "培养箱"
+    CONTINUE_AFTER_WATER = True
+    MAX_ACTION_STEPS_PER_PLOT = 12
+    POST_PLANT_UNKNOWN_RECHECKS = 2
+    POST_PLANT_RECHECK_S = 0.25
+    MAX_VISUAL_PLANT_RETRIES = 1
     NODE_PT = R.PT_NODE_INCUBATOR
 
     
@@ -37,6 +42,9 @@ class IncubatorTask(FieldTask):
     REL_RING_SWING_MIN = 9.0
     REL_RING_STD_MIN = 3.0
     ACTION_EVIDENCE_TTL_S = 2.0
+    
+    
+    ACTION_RING_MIN = 700
 
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
@@ -203,7 +211,7 @@ class IncubatorTask(FieldTask):
             ctx.sleep(0.15)
         peak = max(ring) if ring else 0
         low = min(ring) if ring else 0
-        active = peak >= rec.ACTION_RING_MIN and low <= peak * 0.45
+        active = peak >= self.ACTION_RING_MIN and low <= peak * 0.45
         if not active:
             kind = None
         elif water_score >= rec.WATER_ACTION_TH and water_score >= harvest_score:
@@ -213,7 +221,7 @@ class IncubatorTask(FieldTask):
         else:
             kind = "plant"
         self._action_evidence = (time.monotonic(), kind) if kind else None
-        dev_log(f"[daily] {self.name}: 行判定 kind={kind}(环峰{peak}/谷{low}/阈{rec.ACTION_RING_MIN}"
+        dev_log(f"[daily] {self.name}: 行判定 kind={kind}(环峰{peak}/谷{low}/阈{self.ACTION_RING_MIN}"
                 f" 水分{water_score:.2f}/阈{rec.WATER_ACTION_TH}"
                 f" 镰分{harvest_score:.2f}/阈{rec.HARVEST_ACTION_TH})")
         return kind
@@ -372,28 +380,52 @@ class IncubatorTask(FieldTask):
                 f"{'确认生效' if confirmed else '未确认生效，原地重识别'}")
         return confirmed
 
-    def _plant_here(self, check_prof: bool = False, *, plot_validated: bool = False) -> bool:
-        '空地只在双门槛通过时点一次左键；不再盲点脚下三次。'
+    def _plant_post_click_state(self) -> str:
+        '读取播种点击后的状态，返回 panel/water/plant/harvest/unknown。'
+        frame = self.ctx.grab()
+        if frame is not None and rec.seed_panel_open(frame):
+            return "panel"
+        self._action_evidence = None
+        kind = self._action_kind()
+        return kind if kind in ("water", "plant", "harvest") else "unknown"
+
+    def _plant_here(self, check_prof: bool = False, *, plot_validated: bool = False) -> str:
+        '播种一次并用种子面板或右下角状态确认结果。'
         ctx = self.ctx
         from runtime_guard import dev_log
 
         self._plant_click_sent = False
         if not self._operation_allowed("plant", plot_validated=plot_validated):
-            return True
+            return "denied"
         if not ctx.click(R.PT_PLOT_FEET):
             dev_log(f"[daily] {self.name}: 种植左键注入失败，未标记完成")
-            return True
+            return "denied"
         self._action_evidence = None
         dev_log(f"[daily] {self.name}: 脚下有框且右下角高亮 → 左键种植(单次)")
         ctx.sleep(self.ACTION_SETTLE_S)
-        if ctx.wait_until(rec.seed_panel_open, timeout=0.8, interval=0.2, desc="种子面板"):
-            planted = self._pick_seed_and_confirm()
-            self._plant_click_sent = planted
-            if planted:
+        for check in range(self.POST_PLANT_UNKNOWN_RECHECKS + 1):
+            state = self._plant_post_click_state()
+            dev_log(f"[daily] {self.name}: 种植点击后复核 {check + 1}/"
+                    f"{self.POST_PLANT_UNKNOWN_RECHECKS + 1} state={state}")
+            if state == "panel":
+                planted = self._pick_seed_and_confirm()
+                self._plant_click_sent = planted
+                if planted:
+                    self._mark_plot_evidence()
+                    return "success"
+                return "no_seed"
+            if state in ("water", "harvest"):
+                self._plant_click_sent = True
                 self._mark_plot_evidence()
-            return planted
-        dev_log(f"[daily] {self.name}: 左键后未打开种子面板 → 不重试，继续路线")
-        return True
+                dev_log(f"[daily] {self.name}: 种植后直接切换为 {state}，确认播种成功")
+                return "success"
+            if state == "plant":
+                dev_log(f"[daily] {self.name}: 种植后仍为种植状态，允许一次有视觉依据的重试")
+                return "retry"
+            if check < self.POST_PLANT_UNKNOWN_RECHECKS:
+                ctx.sleep(self.POST_PLANT_RECHECK_S)
+        dev_log(f"[daily] {self.name}: 种植后状态未知且短时复查无结果，禁止立即前进")
+        return "unknown"
 
     def _water_here(self, wait_pot_s: float = 0.0, *, plot_validated: bool = False) -> bool:
         '识别为浇水且双门槛通过时只点一次左键，不使用共享的四次点击重试。'
@@ -461,7 +493,7 @@ class IncubatorTask(FieldTask):
             if step >= self.MINI_MIN_STEPS and tight_state is not None:
                 self._mark_plot_evidence()
                 fast_gold = rec.action_ring_gold_px(frame)
-                prefilter_min = max(1, int(rec.ACTION_RING_MIN * self.ACTION_RING_PREFILTER_RATIO))
+                prefilter_min = max(1, int(self.ACTION_RING_MIN * self.ACTION_RING_PREFILTER_RATIO))
                 if fast_gold < prefilter_min:
                     continue
                 dev_log(f"[daily] {self.name}: W 碎步 {step} 金环预门={fast_gold}/{prefilter_min}")
@@ -498,7 +530,12 @@ class IncubatorTask(FieldTask):
             ctx.log(f"{self.name}:第 {row} 行(上限 {self.MAX_ROWS})")
             done_ops: set = set()
             did_any, none_waits, harvest_clicked = False, 0, False
-            for _ in range(8):
+            after_water = False
+            water_cycles = 0
+            same_water_checks = 0
+            plant_retries = 0
+            stop_for_unknown_plant = False
+            for _ in range(self.MAX_ACTION_STEPS_PER_PLOT):
                 if ctx.should_stop():
                     return TaskResult.ABORT
                 kind = self._action_kind()
@@ -512,12 +549,25 @@ class IncubatorTask(FieldTask):
                         break
                     
                     
-                    if did_any and none_waits < self.POST_ACTION_RECHECKS:
+                    recheck_limit = (self.POST_WATER_RECHECKS if after_water
+                                     else self.POST_ACTION_RECHECKS)
+                    if did_any and none_waits < recheck_limit:
                         none_waits += 1
                         ctx.sleep(self.POST_ACTION_RECHECK_S)
                         continue
                     break
                 none_waits = 0
+                if after_water:
+                    decision, same_water_checks = self._post_water_followup(
+                        kind, same_water_checks)
+                    if decision == "retry":
+                        continue
+                    if decision == "finished":
+                        break
+                    if decision == "new_cycle":
+                        done_ops.clear()
+                        harvest_clicked = False
+                        after_water = False
                 if kind == "harvest":
                     if not self.DO_HARVEST or "harvest" in done_ops:
                         break
@@ -533,20 +583,46 @@ class IncubatorTask(FieldTask):
                 if kind == "plant":
                     if not can_plant or "plant" in done_ops:
                         break
-                    can_plant = self._plant_here(
+                    plant_result = self._plant_here(
                         check_prof=harvest_clicked, plot_validated=True)
+                    if plant_result == "success":
+                        done_ops.add("plant")
+                        did_any = True
+                        continue
+                    if plant_result == "no_seed":
+                        can_plant = False
+                        ctx.log(f"{self.name}:第 {row} 行没有可用种子，停止后续播种")
+                        break
+                    if plant_result == "retry" and plant_retries < self.MAX_VISUAL_PLANT_RETRIES:
+                        plant_retries += 1
+                        ctx.log(f"{self.name}:第 {row} 行播种后仍显示种植，原地重试一次")
+                        continue
+                    if plant_result in ("retry", "unknown"):
+                        stop_for_unknown_plant = True
+                        ctx.log(f"{self.name}:第 {row} 行播种结果无法确认，原地停止任务，绝不向前走")
+                        break
                     if not getattr(self, "_plant_click_sent", False):
                         ctx.log(f"{self.name}:第 {row} 行种植执行被否决，未标记完成，原地重新识别")
                         continue
-                    done_ops.add("plant")
-                    did_any = True
-                    continue
                 if self.DO_WATER:
                     if self._water_here(plot_validated=True):
-                        break
+                        did_any = True
+                        if not self.CONTINUE_AFTER_WATER:
+                            break
+                        water_cycles += 1
+                        if water_cycles >= self.MAX_WATER_CYCLES_PER_PLOT:
+                            ctx.log(f"{self.name}:第 {row} 行达到同格浇水循环上限"
+                                    f" {self.MAX_WATER_CYCLES_PER_PLOT} → 前进")
+                            break
+                        after_water = True
+                        same_water_checks = 0
+                        continue
                     ctx.log(f"{self.name}:第 {row} 行浇水执行被否决，原地重新识别")
                     continue
                 break
+            if stop_for_unknown_plant:
+                nav.back_to_world(ctx)
+                return TaskResult.FAIL
             if row >= self.MAX_ROWS:
                 ctx.log(f"{self.name}:达到行数上限 {self.MAX_ROWS} → 结束")
                 break
