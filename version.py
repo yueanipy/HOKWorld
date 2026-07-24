@@ -1,7 +1,7 @@
 '单一版本与应用元信息来源。'
 from __future__ import annotations
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
 
 
 APP_NAME = "HOKWorld"                  
