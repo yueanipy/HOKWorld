@@ -23,6 +23,7 @@ from paths import is_dev, sessions_dir  # noqa: E402
 _CAST_REASON = {
     "too_close": "落点过近", "too_far": "超出落杆范围",
     "not_water": "落点不在水面", "shallow": "水域深度不足",
+    "bait_wrong": "当前鱼饵不适用", "bait_empty": "需要装备鱼饵",
 }
 
 
@@ -113,7 +114,7 @@ class FishingBot:
             self._dbg(frame, tag)
             self._last_qdbg = now
 
-    _VK = {"A": 0x41, "D": 0x44, "W": 0x57, "S": 0x53, "F": 0x46}
+    _VK = {"1": 0x31, "4": 0x34, "A": 0x41, "D": 0x44, "W": 0x57, "S": 0x53, "F": 0x46}
 
     
     
@@ -330,8 +331,100 @@ class FishingBot:
                 return
             self._sleep(0.3)
 
+    def _wait_bait_panel(self, sct, hwnd, timeout: float = 3.0):
+        '等待鱼饵面板出现，成功时返回面板状态。'
+        deadline = self._clock() + timeout
+        while self._clock() < deadline and not self.stop_flag:
+            if not self._foreground_ok(hwnd):
+                return None
+            frame = self._grab(sct, hwnd)
+            if frame is not None:
+                state = self.rec.bait_panel_state(frame)
+                if state["open"]:
+                    return state
+            self._sleep(0.15)
+        return None
+
+    def _open_bait_panel(self, sct, hwnd):
+        '从角色 HUD 或钓鱼预备态进入鱼饵面板。'
+        for attempt in range(1, 4):
+            frame = self._grab(sct, hwnd)
+            if frame is None:
+                continue
+            state = self.rec.bait_panel_state(frame)
+            if state["open"]:
+                return state
+            fishing_state, _ = self.rec.classify(frame)
+            if fishing_state not in ("FISHING_READY", "WAITING_FOR_BITE"):
+                self.log(f"鱼饵异常后已回角色界面，重新进入钓鱼({attempt}/3)")
+                self._press_key("4")
+                self._sleep(0.65)
+                continue
+            self._press_key("1")
+            state = self._wait_bait_panel(sct, hwnd)
+            if state is not None:
+                return state
+        return None
+
+    def _equip_allowed_bait(self, sct, hwnd, reason: str) -> bool:
+        '仅在普通鱼饵和浓香拟饵之间选择并验证装备结果。'
+        state = self._open_bait_panel(sct, hwnd)
+        if state is None:
+            self.log("无法打开鱼饵面板，停止钓鱼")
+            return False
+
+        current = state["current"]
+        if current == "普通鱼饵":
+            order = ("浓香拟饵", "普通鱼饵")
+        elif current == "浓香拟饵":
+            order = ("普通鱼饵", "浓香拟饵")
+        else:
+            order = ("普通鱼饵", "浓香拟饵")
+
+        for name in order:
+            frame = self._grab(sct, hwnd)
+            if frame is None:
+                continue
+            state = self.rec.bait_panel_state(frame)
+            point = state["allowed"].get(name) if state else None
+            if point is None or name in state["unavailable"]:
+                continue
+            if reason == "bait_wrong" and name == current:
+                continue
+            self._click(hwnd, point)
+            self._sleep(0.30)
+            frame = self._grab(sct, hwnd)
+            if frame is None:
+                continue
+            selected = self.rec.bait_panel_state(frame)
+            use_point = selected["use_point"] if selected else None
+            if use_point is None:
+                continue
+            self._click(hwnd, use_point)
+            self._sleep(0.45)
+            frame = self._grab(sct, hwnd)
+            if frame is None:
+                continue
+            verified = self.rec.bait_panel_state(frame)
+            if verified and verified["current"] == name:
+                self.log(f"已更换为{name}")
+                self._esc()
+                self._sleep(0.45)
+                frame = self._grab(sct, hwnd)
+                if frame is not None and self.rec.bait_panel_state(frame)["open"]:
+                    self._esc()
+                    self._sleep(0.45)
+                    frame = self._grab(sct, hwnd)
+                    if frame is not None and self.rec.bait_panel_state(frame)["open"]:
+                        self.log("鱼饵已装备，但鱼饵面板未关闭，停止钓鱼")
+                        return False
+                return True
+        self.log("普通鱼饵和浓香拟饵均不可用，停止钓鱼")
+        return False
+
     
-    def run(self, count: int = 10, exit_after: bool = False) -> None:
+    def run(self, count: int = 10, exit_after: bool = False,
+            startup_delay_s: float = 3.0) -> None:
         
         if self.stop_flag:
             return
@@ -352,12 +445,11 @@ class FishingBot:
             self._dbgdir.mkdir(parents=True, exist_ok=True)
             self.log(f"调试抓帧 → sessions/_debug/{self._dbgdir.name}")
         self.log(f"开始钓鱼,目标 {count} 条")
-        self.log("5 秒后开始 — 请切到游戏并站在钓鱼点(已持竿、可抛竿的预备态)")
-        for _ in range(5):
-            if self.stop_flag:
-                self.log("已取消")
-                return
-            self._sleep(1)
+        startup_delay_s = max(0.0, float(startup_delay_s))
+        self.log(f"{startup_delay_s:g} 秒后开始 — 请切到游戏并站在钓鱼点(已持竿、可抛竿的预备态)")
+        if not self._sleep(startup_delay_s):
+            self.log("已取消")
+            return
 
         pulled = False          
         pull_t = 0.0
@@ -383,6 +475,8 @@ class FishingBot:
         self.cast_pt = list(CLICK_POINT)  
         cast_adjust = 0         
         err_checked = False     
+        bait_switches = 0       
+        MAX_BAIT_SWITCHES = 4
         MAX_ADJUST = 3          
         CAST_DY = 0.06          
         ERR_CHECK_S = 0.8       
@@ -515,7 +609,29 @@ class FishingBot:
                     continue
 
                 
+                
+                now = self._clock()
                 bs, _ = self.rec.button_state(f)
+                if (bs != "ready" and cast_pending and not err_checked
+                        and now - cast_t > ERR_CHECK_S):
+                    bait_error = self.rec.cast_error(f)
+                    if bait_error in ("bait_wrong", "bait_empty"):
+                        self._save_debug(f, bait_error)
+                        bait_switches += 1
+                        if bait_switches > MAX_BAIT_SWITCHES:
+                            self.log("鱼饵自动更换次数达到上限，停止钓鱼")
+                            break
+                        self.log(f"检测到{_CAST_REASON[bait_error]}，开始更换允许的鱼饵")
+                        if not self._equip_allowed_bait(sct, hwnd, bait_error):
+                            break
+                        cast_pending = False
+                        err_checked = False
+                        consec_cast_fail = 0
+                        last_cast = 0.0
+                        last_progress = self._clock()
+                        continue
+
+                
                 if bs == "ready":
                     if pulled:                       
                         self.log("✗ 脱钩,未钓到,重抛")
@@ -529,6 +645,21 @@ class FishingBot:
                             self.log("已达等级上限(脚本不处理),停机")
                             break
                         err = self.rec.cast_error(f)
+                        if err in ("bait_wrong", "bait_empty"):
+                            self._save_debug(f, err)
+                            bait_switches += 1
+                            if bait_switches > MAX_BAIT_SWITCHES:
+                                self.log("鱼饵自动更换次数达到上限，停止钓鱼")
+                                break
+                            self.log(f"检测到{_CAST_REASON[err]}，开始更换允许的鱼饵")
+                            if not self._equip_allowed_bait(sct, hwnd, err):
+                                break
+                            cast_pending = False
+                            err_checked = False
+                            consec_cast_fail = 0
+                            last_cast = 0.0
+                            last_progress = self._clock()
+                            continue
                         if err in ("too_close", "too_far"):
                             cast_adjust += 1
                             if cast_adjust > MAX_ADJUST:
