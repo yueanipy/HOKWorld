@@ -10,10 +10,67 @@ sys.path.insert(0, str(HERE.parent))
 
 from winenv import find_game_hwnd, is_admin, is_foreground  # noqa: E402
 from capture_broker import subscribe_capture  # noqa: E402
-from gather.recognizer import GATHER_REGION, GatherRecognizer  # noqa: E402
+from gather.recognizer import GATHER_FAST_REGION, GATHER_REGION, GatherRecognizer  # noqa: E402
 from runtime_guard import dev_log, release_known_keys, safe_press_key  # noqa: E402
 
 VK_F = 0x46
+_PERF_LOG_INTERVAL = 10.0
+
+
+class _PerfStats:
+    '按固定窗口汇总识别耗时，避免逐帧写日志。'
+
+    def __init__(self) -> None:
+        self._started = time.perf_counter()
+        self._reset_values()
+
+    def _reset_values(self) -> None:
+        self.frames = 0
+        self.classify_total = 0.0
+        self.classify_max = 0.0
+        self.decide_count = 0
+        self.decide_total = 0.0
+        self.decide_max = 0.0
+        self.ocr_count = 0
+        self.ocr_total = 0.0
+        self.ocr_max = 0.0
+
+    def add_classify(self, elapsed: float) -> None:
+        self.frames += 1
+        self.classify_total += elapsed
+        self.classify_max = max(self.classify_max, elapsed)
+
+    def add_decision(self, elapsed: float, used_ocr: bool) -> None:
+        self.decide_count += 1
+        self.decide_total += elapsed
+        self.decide_max = max(self.decide_max, elapsed)
+        if used_ocr:
+            self.ocr_count += 1
+            self.ocr_total += elapsed
+            self.ocr_max = max(self.ocr_max, elapsed)
+
+    @staticmethod
+    def _avg_ms(total: float, count: int) -> float:
+        return total * 1000.0 / count if count else 0.0
+
+    def maybe_log(self) -> None:
+        now = time.perf_counter()
+        window = now - self._started
+        if window < _PERF_LOG_INTERVAL:
+            return
+        dev_log(
+            f"采集性能[{window:.1f}s]: frames={self.frames}; "
+            f"classify avg={self._avg_ms(self.classify_total, self.frames):.2f}ms "
+            f"max={self.classify_max * 1000.0:.2f}ms; "
+            f"decide calls={self.decide_count} "
+            f"avg={self._avg_ms(self.decide_total, self.decide_count):.2f}ms "
+            f"max={self.decide_max * 1000.0:.2f}ms; "
+            f"ocr calls={self.ocr_count} "
+            f"avg={self._avg_ms(self.ocr_total, self.ocr_count):.2f}ms "
+            f"max={self.ocr_max * 1000.0:.2f}ms"
+        )
+        self._started = now
+        self._reset_values()
 
 
 class GatherPicker:
@@ -93,8 +150,9 @@ class GatherPicker:
         
         last_prompt = time.time() - self.IDLE_AFTER
         text = ""
+        perf = _PerfStats()
         try:
-            with subscribe_capture(hwnd, "gather", [GATHER_REGION], self.IDLE_INTERVAL) as frames:
+            with subscribe_capture(hwnd, "gather", [GATHER_FAST_REGION], self.IDLE_INTERVAL) as frames:
                 self.log("共享画面捕获已就绪(CaptureBroker,与剧情/月卡复用同一 GDI 帧)")
                 while not self.stop_flag:
                     foreground = is_foreground(hwnd)
@@ -115,11 +173,14 @@ class GatherPicker:
                     
                     interval = (self.DETECT_INTERVAL if now - last_prompt < self.IDLE_AFTER
                                 else self.IDLE_INTERVAL)
-                    snapshot = frames.get_frame(interval, [GATHER_REGION], timeout=max(0.5, interval * 3))
+                    snapshot = frames.get_frame(
+                        interval, [GATHER_FAST_REGION], timeout=max(0.5, interval * 3))
                     f = snapshot.frame if snapshot else None
                     if f is None:
                         continue
-                    kind, fn = self.rec.classify(f)          
+                    classify_started = time.perf_counter()
+                    kind, fn = self.rec.classify(f)        
+                    perf.add_classify(time.perf_counter() - classify_started)
                     if kind != "none":
                         last_prompt = now                    
                     
@@ -135,7 +196,30 @@ class GatherPicker:
                                or (rechecking and notext_round < self.NOTEXT_MAX
                                    and now - last_recheck >= self.NOTEXT_GAP))
                         if due:
+                            used_ocr = not (kind == "chongxian" and not self.rec.whitelist)
+                            if used_ocr:
+                                
+                                
+                                detail = frames.get_frame(
+                                    self.DETECT_INTERVAL, [GATHER_REGION], timeout=0.5)
+                                detail_frame = detail.frame if detail else None
+                                if detail_frame is None:
+                                    continue
+                                refresh_started = time.perf_counter()
+                                refreshed_kind, refreshed_fn = self.rec.classify(detail_frame)
+                                perf.add_classify(time.perf_counter() - refresh_started)
+                                refreshed_actionable = (
+                                    refreshed_kind in ("pick", "chongxian")
+                                    or (refreshed_kind == "other" and self.rec.whitelist)
+                                )
+                                if not refreshed_actionable:
+                                    continue
+                                kind, fn = refreshed_kind, refreshed_fn
+                                used_ocr = not (
+                                    kind == "chongxian" and not self.rec.whitelist)
+                            decide_started = time.perf_counter()
                             press, text, reason = self._decide(kind, fn)   
+                            perf.add_decision(time.perf_counter() - decide_started, used_ocr)
                             if press:
                                 if not self._press_f():
                                     continue
@@ -163,6 +247,7 @@ class GatherPicker:
                     elif prompt_active and now - last_seen >= self.ABSENT_RESET:
                         prompt_active, press_round, decided_press, skip_logged = False, 0, False, False
                         notext_round, rechecking = 0, False
+                    perf.maybe_log()
         finally:
             release_known_keys(self.log)
         self.log(f"自动采集结束,共采 {self.picked} 处")
