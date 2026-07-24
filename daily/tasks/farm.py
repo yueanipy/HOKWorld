@@ -18,6 +18,8 @@ class FarmTask(FieldTask):
     ACTION_SETTLE_S = 3.0
     ACTION_KIND_WATER_TH = 0.85  
     HANDLE_HIGH_VALUE_WARNING = True
+    CONTINUE_AFTER_WATER = True
+    MAX_ACTION_STEPS_PER_PLOT = 12
 
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
