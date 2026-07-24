@@ -12,7 +12,7 @@ if sys.stdout is None or sys.stderr is None:
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QSize, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QPoint, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QDrag, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QHBoxLayout, QListWidget, QListWidgetItem,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, CardWidget, ExpandGroupSettingCard, FluentIcon as FIF,
     ComboBox, FluentWindow, IconWidget, InfoBar, InfoBarPosition, MessageBox,
+    InfoBadge,
     IndeterminateProgressRing, MessageBoxBase, NavigationItemPosition, PrimaryPushButton,
     ProgressBar, PushButton,
     PushSettingCard, SettingCard, SingleDirectionScrollArea, SpinBox, StrongBodyLabel,
@@ -35,10 +36,13 @@ sys.path.insert(0, str(HERE))
 import os         # noqa: E402
 import threading  # noqa: E402
 
-from winenv import (activate_game_window, allow_foreground_activation, can_auto_activate_game,
-                      center_window, find_game_hwnd, hide_console, is_admin, is_foreground,
-                      last_input_tick, relaunch_as_admin, set_app_id)  # noqa: E402
+from winenv import (  # noqa: E402
+    activate_game_window, allow_foreground_activation, can_auto_activate_game,
+    center_window, find_game_hwnd, hide_console, is_admin, is_foreground,
+    last_input_tick, relaunch_as_admin, set_app_id,
+)
 from config import cfg  # noqa: E402
+from game_exit_monitor import GameExitMonitor  # noqa: E402
 from runtime_guard import atomic_write_text, dev_log, input_owner, registry, release_known_keys  # noqa: E402
 from version import __version__  # noqa: E402
 
@@ -55,6 +59,50 @@ ASSETS = HERE / "assets"
 
 
 _REALTIME_INIT_LOCK = threading.Lock()
+
+
+class _LatestStatusBatcher:
+    '合并高频状态消息，只在 GUI 线程定时显示最新一条。'
+
+    INTERVAL_MS = 150
+
+    def __init__(self, parent: QWidget, apply) -> None:
+        self._apply = apply
+        self._pending: str | None = None
+        self._closed = False
+        self._timer = QTimer(parent)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(self.INTERVAL_MS)
+        self._timer.timeout.connect(self._flush)
+
+    def push(self, message: str) -> None:
+        '容量固定为一；新状态覆盖尚未显示的旧状态。'
+        if self._closed:
+            return
+        self._pending = str(message)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def show_now(self, message: str) -> None:
+        '清除旧消息并立即显示关键状态。'
+        if self._closed:
+            return
+        self._timer.stop()
+        self._pending = None
+        self._apply(str(message))
+
+    def shutdown(self) -> None:
+        '关闭窗口时停止刷新并丢弃未显示消息。'
+        self._closed = True
+        self._timer.stop()
+        self._pending = None
+
+    def _flush(self) -> None:
+        if self._closed or self._pending is None:
+            return
+        message = self._pending
+        self._pending = None
+        self._apply(message)
 
 
 def _nav_icon(name, fallback):
@@ -338,37 +386,52 @@ class DailyWorker(QThread):
     sig_progress = Signal(int, int)   
     sig_done = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, auto_launch_game: bool) -> None:
         super().__init__()
-        self.orch = None
+        self._auto_launch_game = bool(auto_launch_game)
+        self._input_tick_at_start: int | None = None
+        self.runner = None
         self._paused = False
         self._stop_requested = False
+
+    def set_initial_input_tick(self, tick: int | None) -> None:
+        self._input_tick_at_start = tick
 
     def run(self) -> None:
         try:
             import importlib
             import sys as _sys
             
-            import daily.regions, daily.recognizer, daily.context, daily.navigation
-            import daily.base, daily.config, daily.tasks, daily.orchestrator
+            import daily.base
+            import daily.config
+            import daily.context
+            import daily.navigation
+            import daily.orchestrator
+            import daily.recognizer
+            import daily.regions
+            import daily.startup
+            import daily.tasks
             import daily.tasks._field
             
             task_mods = [m for n, m in sorted(_sys.modules.items())
                          if n.startswith("daily.tasks.") and n != "daily.tasks._field"]
             for m in (daily.regions, daily.recognizer, daily.context, daily.navigation,
                       daily.base, daily.config, daily.tasks._field,
-                      *task_mods, daily.tasks, daily.orchestrator):
+                      *task_mods, daily.tasks, daily.orchestrator, daily.startup):
                 importlib.reload(m)
-            from daily.orchestrator import DailyOrchestrator
-            self.orch = DailyOrchestrator(
+            from daily.startup import DailyStartupRunner
+            self.runner = DailyStartupRunner(
+                auto_launch_game=self._auto_launch_game,
                 log=self.sig_log.emit,
-                on_progress=lambda d, t: self.sig_progress.emit(d, t))
-            self.orch.set_paused(self._paused)
+                on_progress=lambda d, t: self.sig_progress.emit(d, t),
+                input_tick_at_start=self._input_tick_at_start,
+            )
+            self.runner.set_paused(self._paused)
             if self._stop_requested:
-                self.orch.stop()
+                self.runner.stop()
                 return
             with input_owner("每日任务"):
-                self.orch.run()
+                self.runner.run()
         except Exception as exc:
             dev_log("每日任务一条龙线程异常,执行保守急停", exc)
             registry.stop_all("每日任务线程异常")
@@ -380,13 +443,86 @@ class DailyWorker(QThread):
 
     def stop(self) -> None:
         self._stop_requested = True
-        if self.orch:
-            self.orch.stop()
+        if self.runner:
+            self.runner.stop()
 
     def set_paused(self, on: bool) -> None:
         self._paused = bool(on)
-        if self.orch:
-            self.orch.set_paused(self._paused)
+        if self.runner:
+            self.runner.set_paused(self._paused)
+
+
+class AutoWaterWorker(QThread):
+    '独立自动浇水线程。'
+    sig_log = Signal(str)
+    sig_state = Signal(str)
+    sig_done = Signal()
+
+    def __init__(self, interval_minutes: int, close_game_after: bool,
+                 shutdown_hours: int) -> None:
+        super().__init__()
+        self._interval_minutes = int(interval_minutes)
+        self._close_game_after = bool(close_game_after)
+        self._shutdown_hours = int(shutdown_hours)
+        self._input_tick_at_start: int | None = None
+        self.scheduler = None
+        self._stop_requested = False
+        self.auto_close_requested = False
+
+    def set_initial_input_tick(self, tick: int | None) -> None:
+        self._input_tick_at_start = tick
+
+    def run(self) -> None:
+        try:
+            import importlib
+            import sys as _sys
+            import launcher
+            import daily.base
+            import daily.config
+            import daily.context
+            import daily.navigation
+            import daily.recognizer
+            import daily.regions
+            import daily.tasks
+            import daily.tasks._field
+            import independent.auto_watering
+
+            task_mods = [m for n, m in sorted(_sys.modules.items())
+                         if n.startswith("daily.tasks.") and n != "daily.tasks._field"]
+            for module in (daily.regions, daily.recognizer, daily.context,
+                           daily.navigation, daily.base, daily.config,
+                           daily.tasks._field, *task_mods, daily.tasks, launcher,
+                           independent.auto_watering):
+                importlib.reload(module)
+            from independent.auto_watering import AutoWaterScheduler
+
+            self.scheduler = AutoWaterScheduler(
+                interval_minutes=self._interval_minutes,
+                close_game_after=self._close_game_after,
+                shutdown_hours=self._shutdown_hours,
+                log=self.sig_log.emit,
+                on_state=self.sig_state.emit,
+                input_tick_at_start=self._input_tick_at_start,
+            )
+            if self._stop_requested:
+                self.scheduler.stop()
+                return
+            with input_owner("自动浇水"):
+                self.scheduler.run()
+            self.auto_close_requested = bool(self.scheduler.auto_close_requested)
+        except Exception as exc:
+            dev_log("自动浇水线程异常,执行保守急停", exc)
+            registry.stop_all("自动浇水线程异常")
+            release_known_keys(self.sig_log.emit)
+            self.sig_log.emit(f"[错误] {type(exc).__name__}: {exc}")
+            self.sig_log.emit("自动浇水已停止,详情见 data/logs/hokworld_dev.log")
+        finally:
+            self.sig_done.emit()
+
+    def stop(self) -> None:
+        self._stop_requested = True
+        if self.scheduler:
+            self.scheduler.stop()
 
 
 
@@ -451,9 +587,11 @@ class FishingInterface(ScrollInterface):
     def __init__(self) -> None:
         super().__init__("fishingInterface")
         self._worker: FishWorker | None = None
+        self._water_worker: AutoWaterWorker | None = None
         self._paused = False
         self._caught = 0
         self._resume_realtime = False
+        self._water_resume_realtime = False
 
         root = self.vbox
         root.setContentsMargins(28, 24, 28, 24)
@@ -477,6 +615,34 @@ class FishingInterface(ScrollInterface):
         self.card.addGroup(FIF.POWER_BUTTON, "完成后退出", "结束后退出钓鱼界面", self.exit_switch)
         root.addWidget(self.card)
 
+        self.water_card = ExpandGroupSettingCard(
+            FIF.LEAF, "自动浇水", "定时运行农贸作物和培养箱", self)
+        self.water_start_btn = PrimaryPushButton(FIF.PLAY, "开始")
+        self.water_stop_btn = PushButton(FIF.PAUSE, "停止")
+        self.water_stop_btn.setEnabled(False)
+        self.water_card.addWidget(self.water_start_btn)
+        self.water_card.addWidget(self.water_stop_btn)
+
+        self.water_interval_spin = SpinBox()
+        self.water_interval_spin.setRange(1, 1440)
+        self.water_interval_spin.setValue(
+            max(1, int(cfg.get("auto_water_interval_minutes") or 90)))
+        self.water_interval_spin.setFixedWidth(150)
+        self.water_card.addGroup(
+            FIF.SYNC, "间隔时间", "相邻两轮启动间隔（分钟）", self.water_interval_spin)
+        self.water_close_switch = SwitchButton()
+        self.water_close_switch.setChecked(bool(cfg.get("auto_water_close_game")))
+        self.water_card.addGroup(
+            FIF.POWER_BUTTON, "完成后关闭游戏", "等待期间只保留脚本运行", self.water_close_switch)
+        self.water_shutdown_spin = SpinBox()
+        self.water_shutdown_spin.setRange(0, 720)
+        self.water_shutdown_spin.setValue(
+            max(0, int(cfg.get("auto_water_shutdown_hours") or 0)))
+        self.water_shutdown_spin.setFixedWidth(150)
+        self.water_card.addGroup(
+            FIF.POWER_BUTTON, "自动关闭", "关闭游戏和软件的小时数，0 表示关闭", self.water_shutdown_spin)
+        root.addWidget(self.water_card)
+
         
         
         self.status_card = CardWidget()
@@ -493,8 +659,17 @@ class FishingInterface(ScrollInterface):
         root.addStretch(1)
 
         self._last_msg = ""
+        self._status_batch = _LatestStatusBatcher(self, self._apply_status_message)
         self.start_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
+        self.water_start_btn.clicked.connect(self._start_water)
+        self.water_stop_btn.clicked.connect(self._stop_water)
+        self.water_interval_spin.valueChanged.connect(
+            lambda value: cfg.set("auto_water_interval_minutes", int(value)))
+        self.water_close_switch.checkedChanged.connect(
+            lambda on: cfg.set("auto_water_close_game", bool(on)))
+        self.water_shutdown_spin.valueChanged.connect(
+            lambda value: cfg.set("auto_water_shutdown_hours", int(value)))
 
     
     def _start(self) -> None:
@@ -570,15 +745,82 @@ class FishingInterface(ScrollInterface):
         _resume_realtime_for(self, "自动钓鱼", resume_realtime)
 
     
+    def _start_water(self) -> None:
+        if self._water_worker:
+            return
+        self._water_resume_realtime = _suspend_realtime_for(self, "自动浇水")
+        ok, reason = registry.start("自动浇水")
+        if not ok:
+            _resume_realtime_for(self, "自动浇水", self._water_resume_realtime)
+            self._water_resume_realtime = False
+            InfoBar.warning("任务已在运行", reason, duration=4000,
+                            position=InfoBarPosition.TOP, parent=self)
+            return
+        self._warn_admin()
+        interval = self.water_interval_spin.value()
+        close_game = self.water_close_switch.isChecked()
+        shutdown_hours = self.water_shutdown_spin.value()
+        cfg.set("auto_water_interval_minutes", int(interval), save=False)
+        cfg.set("auto_water_close_game", bool(close_game), save=False)
+        cfg.set("auto_water_shutdown_hours", int(shutdown_hours), save=True)
+        self._show_status("自动浇水启动中…")
+        self._water_worker = AutoWaterWorker(interval, close_game, shutdown_hours)
+        self._water_worker.sig_log.connect(self._append)
+        self._water_worker.sig_state.connect(self._on_water_state)
+        self._water_worker.sig_done.connect(self._on_water_done)
+        registry.set_stopper("自动浇水", self._water_worker.stop)
+        self.water_start_btn.setEnabled(False)
+        self.water_stop_btn.setEnabled(True)
+        self.water_interval_spin.setEnabled(False)
+        self.water_close_switch.setEnabled(False)
+        self.water_shutdown_spin.setEnabled(False)
+        self._set_card_content(self.water_card, "运行中…")
+        tick = _minimize_for_task(
+            self, self._append, handoff=False, after=self._water_worker.start)
+        self._water_worker.set_initial_input_tick(tick)
+
+    def _on_water_state(self, state: str) -> None:
+        self._set_card_content(self.water_card, state)
+        self._append(state)
+
+    def _stop_water(self) -> None:
+        if self._water_worker:
+            self._append("自动浇水停止中…")
+            self.water_stop_btn.setEnabled(False)
+            self._water_worker.stop()
+
+    def _on_water_done(self) -> None:
+        auto_closing = bool(
+            self._water_worker and self._water_worker.auto_close_requested)
+        if self._water_worker:
+            self._water_worker.wait(1500)
+            self._water_worker = None
+        registry.finish("自动浇水")
+        resume_realtime = self._water_resume_realtime
+        self._water_resume_realtime = False
+        self.water_start_btn.setEnabled(True)
+        self.water_stop_btn.setEnabled(False)
+        self.water_interval_spin.setEnabled(True)
+        self.water_close_switch.setEnabled(True)
+        self.water_shutdown_spin.setEnabled(True)
+        self._set_card_content(self.water_card, "定时运行农贸作物和培养箱")
+        if auto_closing:
+            self._append("自动关闭时间已到，正在关闭软件")
+            window = self.window()
+            if window is not None:
+                QTimer.singleShot(0, window.close)
+        else:
+            _resume_realtime_for(self, "自动浇水", resume_realtime)
+
+    
     def _warn_admin(self) -> None:
         if not is_admin():
             InfoBar.warning("需要管理员", "请以管理员权限重启后再开始。",
                             duration=4000, position=InfoBarPosition.TOP, parent=self)
 
     def _show_status(self, msg: str) -> None:
-        self._last_msg = msg
         self.status_card.show()
-        self._refresh_status()
+        self._status_batch.show_now(msg)
 
     def _set_card_content(self, card, text: str) -> None:
         try:
@@ -587,7 +829,10 @@ class FishingInterface(ScrollInterface):
             pass
 
     def _append(self, msg: str) -> None:
-        self._last_msg = msg                  
+        self._status_batch.push(msg)
+
+    def _apply_status_message(self, msg: str) -> None:
+        self._last_msg = msg
         self._refresh_status()
 
     def _refresh_status(self) -> None:
@@ -596,6 +841,9 @@ class FishingInterface(ScrollInterface):
     def emergency_stop(self) -> None:
         if self._worker:
             self._worker.stop()
+            self._append("F12 急停")
+        if self._water_worker:
+            self._water_worker.stop()
             self._append("F12 急停")
         release_known_keys(self._append)
 
@@ -682,6 +930,7 @@ class RealtimeInterface(ScrollInterface):
         root.addWidget(self.status_card)
         root.addStretch(1)
 
+        self._status_batch = _LatestStatusBatcher(self, self._apply_status_message)
         self.start_btn.clicked.connect(self._start)
         self.pause_btn.clicked.connect(self._toggle_pause)
         self.stop_btn.clicked.connect(self._stop)
@@ -995,11 +1244,13 @@ class RealtimeInterface(ScrollInterface):
             pass
 
     def _show_status(self, msg: str) -> None:
-        self._last_msg = msg
         self.status_card.show()
-        self.status.setText(msg)
+        self._status_batch.show_now(msg)
 
     def _append(self, msg: str) -> None:
+        self._status_batch.push(msg)
+
+    def _apply_status_message(self, msg: str) -> None:
         self._last_msg = msg
         self.status.setText(msg)
 
@@ -1129,9 +1380,10 @@ class DailyInterface(ScrollInterface):
         self._paused = False
         self._resume_realtime = False
         self._last_msg = ""
-        from daily.config import DailyConfig, TASK_REGISTRY
+        from daily.config import DailyConfig, DISPATCH_REGIONS, TASK_REGISTRY
         self._DailyConfig = DailyConfig
         self._TASK_REGISTRY = TASK_REGISTRY
+        self._DISPATCH_REGIONS = DISPATCH_REGIONS
         self.config = DailyConfig()
 
         root = self.vbox
@@ -1151,8 +1403,13 @@ class DailyInterface(ScrollInterface):
         root.addWidget(self.card)
 
         
+        self.launch_switch = SwitchButton()
+        self.launch_switch.setChecked(bool(cfg.get("daily_auto_launch_game")))
+        self.launch_switch.checkedChanged.connect(
+            lambda on: cfg.set("daily_auto_launch_game", bool(on)))
+
         
-        self._daily_option_widgets: list[QWidget] = []
+        self._daily_option_widgets: list[QWidget] = [self.launch_switch]
         self.farm_route_combo = ComboBox()
         self.farm_route_combo.addItems(["第二列", "第五列"])
         farm_route = self.config.param("farm", "route", "第二列")
@@ -1175,9 +1432,23 @@ class DailyInterface(ScrollInterface):
         self.card.addGroup(
             FIF.TILES, "培养箱", "选择需要种植的种子", self.incubator_seed_combo)
 
-        self.dispatch_pet_combo = self._blank_daily_combo("宠物")
+        dispatch_options = QWidget()
+        dispatch_options_lay = QHBoxLayout(dispatch_options)
+        dispatch_options_lay.setContentsMargins(0, 0, 0, 0)
+        dispatch_options_lay.setSpacing(8)
+        self.dispatch_region_combos: list[ComboBox] = []
+        selected_regions = self.config.dispatch_regions()
+        for index, selected in enumerate(selected_regions):
+            combo = ComboBox()
+            combo.addItems(self._DISPATCH_REGIONS)
+            combo.setCurrentText(selected)
+            combo.setMinimumWidth(132)
+            combo.setMaxVisibleItems(8)
+            dispatch_options_lay.addWidget(CaptionLabel(f"地区{index + 1}"))
+            dispatch_options_lay.addWidget(combo)
+            self.dispatch_region_combos.append(combo)
         self.card.addGroup(
-            FIF.ROBOT, "宠物派遣", "选择参与派遣的宠物", self.dispatch_pet_combo)
+            FIF.ROBOT, "宠物派遣", "选择三个互不重复的派遣地区", dispatch_options)
 
         self.friends_target_combo = self._blank_daily_combo("好友")
         self.card.addGroup(
@@ -1190,24 +1461,29 @@ class DailyInterface(ScrollInterface):
         self.cooking_material_combo = self._blank_daily_combo("材料")
         self.card.addGroup(
             FIF.CAFE, "烹饪", "选择制作材料", self.cooking_material_combo)
+        self.card.addGroup(
+            FIF.GAME, "自动启动游戏", "进入角色界面后开始每日任务", self.launch_switch)
 
         self._daily_option_widgets.extend([
             self.farm_route_combo,
             self.farm_seed_combo,
             self.incubator_seed_combo,
-            self.dispatch_pet_combo,
+            *self.dispatch_region_combos,
             self.friends_target_combo,
             self.alchemy_material_combo,
             self.cooking_material_combo,
         ])
         self.farm_route_combo.currentTextChanged.connect(self._on_farm_route_changed)
+        for combo in self.dispatch_region_combos:
+            combo.currentTextChanged.connect(self._on_dispatch_region_changed)
+        self._sync_dispatch_region_choices(save=False)
 
         
         self.list_box = CardWidget()
         self.list_lay = QVBoxLayout(self.list_box)
         self.list_lay.setContentsMargins(12, 12, 12, 12)
         self.list_lay.setSpacing(8)
-        title = StrongBodyLabel("任务")
+        title = StrongBodyLabel("任务(可拖动)")
         self.list_lay.addWidget(title)
         self.task_list = _ReorderList()
         self.task_list.setDragDropMode(QAbstractItemView.InternalMove)
@@ -1240,6 +1516,7 @@ class DailyInterface(ScrollInterface):
         root.addWidget(self.status_card)
         root.addStretch(1)
 
+        self._status_batch = _LatestStatusBatcher(self, self._apply_status_message)
         self.start_btn.clicked.connect(self._start)
         self.pause_btn.clicked.connect(self._toggle_pause)
         self.stop_btn.clicked.connect(self._stop)
@@ -1285,6 +1562,20 @@ class DailyInterface(ScrollInterface):
         if route in ("第二列", "第五列"):
             self.config.set_param("farm", "route", route)
 
+    def _on_dispatch_region_changed(self, _region: str) -> None:
+        self._sync_dispatch_region_choices(save=True)
+
+    def _sync_dispatch_region_choices(self, save: bool) -> None:
+        '禁用其它选择框中已经占用的派遣地区。'
+        selected = [combo.currentText() for combo in self.dispatch_region_combos]
+        for combo in self.dispatch_region_combos:
+            current = combo.currentText()
+            for index in range(combo.count()):
+                name = combo.itemText(index)
+                combo.setItemEnabled(index, name == current or name not in selected)
+        if save and len(selected) == 3 and len(set(selected)) == 3:
+            self.config.set_dispatch_regions(selected)
+
     def _set_rows_enabled(self, on: bool) -> None:
         
         self.task_list.setDragDropMode(
@@ -1325,12 +1616,16 @@ class DailyInterface(ScrollInterface):
         self.progress.setValue(0)
         self.progress.show()
         self._show_status("每日任务一条龙启动中…")
-        self._worker = DailyWorker()
+        auto_launch = self.launch_switch.isChecked()
+        cfg.set("daily_auto_launch_game", bool(auto_launch))
+        self._worker = DailyWorker(auto_launch)
         self._worker.sig_log.connect(self._append)
         self._worker.sig_progress.connect(self._on_progress)
         self._worker.sig_done.connect(self._on_done)
         registry.set_stopper("每日任务", self._worker.stop)
-        _minimize_for_task(self, self._append, after=self._worker.start)
+        tick = _minimize_for_task(
+            self, self._append, handoff=not auto_launch, after=self._worker.start)
+        self._worker.set_initial_input_tick(tick)
 
     def _on_progress(self, done: int, total: int) -> None:
         self.progress.setMaximum(max(1, total))
@@ -1374,11 +1669,13 @@ class DailyInterface(ScrollInterface):
 
     
     def _show_status(self, msg: str) -> None:
-        self._last_msg = msg
         self.status_card.show()
-        self._set_status_text(msg)
+        self._status_batch.show_now(msg)
 
     def _append(self, msg: str) -> None:
+        self._status_batch.push(msg)
+
+    def _apply_status_message(self, msg: str) -> None:
         self._last_msg = msg
         self._set_status_text(msg)
 
@@ -1425,6 +1722,9 @@ class ListEditDialog(MessageBoxBase):
 class SettingsInterface(ScrollInterface):
     '设置(简洁卡片版,对齐实时检测):每项两行 = 标题 + 说明。'
 
+    updateAvailabilityChanged = Signal(bool)
+    autoCloseScriptChanged = Signal(bool)
+
     def __init__(self) -> None:
         super().__init__("settingsInterface")
 
@@ -1445,12 +1745,13 @@ class SettingsInterface(ScrollInterface):
         self.blacklist_card.clicked.connect(self._edit_blacklist)
         root.addWidget(self.blacklist_card)
 
-        
-        self.jitter_card = SwitchSettingCard(
-            FIF.ROBOT, "时序抖动", "随机调整操作间隔")
-        self.jitter_card.setChecked(bool(cfg.get("timing_jitter")))
-        self.jitter_card.checkedChanged.connect(lambda on: cfg.set("timing_jitter", bool(on)))
-        root.addWidget(self.jitter_card)
+        self.auto_close_script_card = SwitchSettingCard(
+            FIF.POWER_BUTTON, "自动关闭脚本", "游戏关闭后结束脚本")
+        self.auto_close_script_card.setChecked(
+            bool(cfg.get("close_script_when_game_exits")))
+        self.auto_close_script_card.checkedChanged.connect(
+            self._on_auto_close_script_changed)
+        root.addWidget(self.auto_close_script_card)
 
         
         self.monthly_card = SwitchSettingCard(
@@ -1472,6 +1773,12 @@ class SettingsInterface(ScrollInterface):
         root.addWidget(self.status_card)
 
         root.addStretch(1)
+
+    def _on_auto_close_script_changed(self, on: bool) -> None:
+        '保存退出策略，并通知主窗口立即更新进程监控。'
+        enabled = bool(on)
+        cfg.set("close_script_when_game_exits", enabled)
+        self.autoCloseScriptChanged.emit(enabled)
 
     
     def _edit_whitelist(self) -> None:
@@ -1544,8 +1851,19 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.realtime, _nav_icon("realtime.png", FIF.VIDEO), "实时检测")
         self.addSubInterface(self.daily, _nav_icon("daily.png", FIF.CALENDAR), "每日任务")
         self.addSubInterface(self.fishing, _nav_icon("task.png", FIF.GAME), "独立任务")
-        self.addSubInterface(self.settings, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM)
+        self._settings_nav_item = self.addSubInterface(
+            self.settings, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM)
         self.addSubInterface(self.about, FIF.INFO, "关于", NavigationItemPosition.BOTTOM)
+
+        self._update_badge = InfoBadge.success(
+            "", self._settings_nav_item.parentWidget())
+        self._update_badge.setFixedSize(9, 9)
+        self._update_badge_active = False
+        self._settings_nav_item.installEventFilter(self)
+        self._update_badge.hide()
+        self.settings.updateAvailabilityChanged.connect(self._set_update_badge_visible)
+        self.settings.autoCloseScriptChanged.connect(
+            self._on_auto_close_script_changed)
 
         
         self.navigationInterface.setExpandWidth(170)
@@ -1564,11 +1882,62 @@ class MainWindow(FluentWindow):
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(100)
         self._close_timer.timeout.connect(self._poll_close_ready)
+        self._game_exit_monitor = GameExitMonitor(
+            enabled=bool(cfg.get("close_script_when_game_exits")),
+            log=lambda message: dev_log(f"[game exit] {message}"),
+        )
+        self._game_exit_timer = QTimer(self)
+        self._game_exit_timer.setInterval(500)
+        self._game_exit_timer.timeout.connect(self._poll_game_exit)
+        self._game_exit_timer.start()
         self.emergencyStopRequested.connect(self._handle_emergency_stop)
         if keyboard is not None:
             self._hotkey = keyboard.Listener(on_press=self._on_key)
             self._hotkey.start()
 
+
+    def _set_update_badge_visible(self, visible: bool) -> None:
+        '在设置菜单项右侧显示或隐藏更新绿点。'
+        self._update_badge_active = bool(
+            visible and self.settings.startup_sw.isChecked())
+        self._sync_update_badge()
+
+    def _on_auto_close_script_changed(self, enabled: bool) -> None:
+        '设置变化后立即启用或解除游戏进程监控。'
+        self._game_exit_monitor.set_enabled(bool(enabled))
+
+    def _poll_game_exit(self) -> None:
+        '游戏进程退出时关闭程序；自动浇水持有生命周期期间不适用。'
+        if self._closing:
+            return
+        suppressed = registry.active() == "自动浇水"
+        if self._game_exit_monitor.poll(suppressed=suppressed):
+            dev_log("检测到游戏进程退出:自动关闭脚本优先于实时任务复位")
+            self.close()
+
+    def _sync_update_badge(self) -> None:
+        '按设置菜单项当前宽度放置绿点。'
+        target = self._settings_nav_item
+        show = self._update_badge_active and target.isVisible()
+        self._update_badge.setVisible(show)
+        if show:
+            if target.isCompacted:
+                x = target.geometry().right() - self._update_badge.width() - 2
+                y = target.geometry().top() + 2
+            else:
+                x = target.geometry().right() - self._update_badge.width() - 10
+                y = target.geometry().center().y() - self._update_badge.height() // 2
+            self._update_badge.move(x, y)
+            self._update_badge.raise_()
+
+    def eventFilter(self, watched, event) -> bool:
+        '菜单展开、折叠或移动时同步更新绿点。'
+        if watched is getattr(self, "_settings_nav_item", None):
+            if event.type() == QEvent.Hide:
+                self._update_badge.hide()
+            elif event.type() in (QEvent.Show, QEvent.Move, QEvent.Resize):
+                QTimer.singleShot(0, self._sync_update_badge)
+        return super().eventFilter(watched, event)
 
     def _on_key(self, key) -> None:
         'pynput 线程回调:立即停动作,但绝不直接读写 Qt 控件。'
@@ -1589,6 +1958,7 @@ class MainWindow(FluentWindow):
         '当前仍由主窗口持有的全部 QThread,用于关闭前统一等待。'
         workers = [
             self.fishing._worker,
+            self.fishing._water_worker,
             self.realtime._launcher,
             self.realtime._worker,
             self.realtime._gather,
@@ -1600,11 +1970,17 @@ class MainWindow(FluentWindow):
     def _begin_close(self) -> None:
         '只执行一次的协作式停机:停输入、停监听、取消下载,不强杀线程。'
         dev_log("主窗口关闭:开始统一停止后台线程")
+        self._game_exit_timer.stop()
+        self._game_exit_monitor.close()
+        for page in (self.fishing, self.realtime, self.daily):
+            page._status_batch.shutdown()
         registry.stop_all("主窗口关闭")
         self.realtime._aborting = True
         self.realtime._stop_workers_no_ui()
         if self.fishing._worker:
             self.fishing._worker.stop()
+        if self.fishing._water_worker:
+            self.fishing._water_worker.stop()
         if self.daily._worker:
             self.daily._worker.stop()
         if self._hotkey is not None:
