@@ -326,7 +326,7 @@ class AlchemyTask(GloryTowerRouteTask):
         return TaskResult.SUCCESS
 
     def _confirm_open_after_arrival(self) -> bool:
-        '确认首次 F 生效；已锁存唯一制药交互时最多补按两次。'
+        '确认首次 F 生效；已锁存唯一制作台交互时最多补按两次。'
         ctx = self.ctx
         total_presses = 1  
         while total_presses <= 3 and not ctx.should_stop():
@@ -354,7 +354,7 @@ class AlchemyTask(GloryTowerRouteTask):
                 break
             prompt = self._interaction_text(last_frame) if last_frame is not None else ""
             if climb_recovered:
-                self._dev_log("爬墙纠偏已重新命中制药，准备补按 F")
+                self._dev_log(f"爬墙纠偏已重新命中{self.CRAFT_LABEL}，准备补按 F")
             else:
                 
                 
@@ -377,7 +377,7 @@ class AlchemyTask(GloryTowerRouteTask):
             f"三次 F 未打开页面，开始一次有界重新站位 c_visible={climb_visible}")
         if not self._recover_climb_overshoot(
                 self.CRAFT_LABEL, release_climb=climb_visible):
-            self._dev_log("F 失败后的重新站位未命中制药，不盲按 F")
+            self._dev_log(f"F 失败后的重新站位未命中{self.CRAFT_LABEL}，不盲按 F")
             return False
         ctx.sleep(0.12)
         dev_log(f"[glory route] {self.task_id} F失败恢复命中，准备强制发送 F")
