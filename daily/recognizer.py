@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import threading
+import weakref
 
 import cv2
 import numpy as np
@@ -10,6 +12,7 @@ import numpy as np
 from fishing.matcher import _get_ocr
 from fishing.template_bank import crop, normalize
 from daily import regions as R
+from daily.config import DISPATCH_REGIONS
 
 MIN_CONF = 0.5   
 
@@ -1096,16 +1099,127 @@ def farm_high_value_warning(frame: np.ndarray):
 
 
 
+_DISPATCH_REGION_ALIASES = {"秘森之地": "秘禁之地"}
+
+
+def _dispatch_region_name(text: str) -> str | None:
+    clean = re.sub(r"\s+", "", str(text))
+    for alias, name in _DISPATCH_REGION_ALIASES.items():
+        if alias in clean:
+            return name
+    return next((name for name in DISPATCH_REGIONS if name in clean), None)
+
+
 def in_dispatch_page(frame: np.ndarray) -> bool:
     '收紧:要求标题完整「探险派遣」(仅"派遣"会被世界里"派遣小屋"提示误判)。'
     return "探险派遣" in ocr_text(frame, R.ROI_DISPATCH_TITLE)
+
+
+_DISPATCH_OCR_CACHE = threading.local()
+
+
+def clear_dispatch_page_cache() -> None:
+    '清除当前线程保存的派遣页OCR结果。'
+    _DISPATCH_OCR_CACHE.frame_ref = None
+    _DISPATCH_OCR_CACHE.boxes = ()
+
+
+def _dispatch_page_boxes(frame: np.ndarray):
+    '同一派遣页帧只执行一次OCR。'
+    frame_ref = getattr(_DISPATCH_OCR_CACHE, "frame_ref", None)
+    if frame_ref is not None and frame_ref() is frame:
+        return getattr(_DISPATCH_OCR_CACHE, "boxes", ())
+
+    boxes = tuple(ocr_boxes(frame, R.ROI_DISPATCH_PAGE_TEXT))
+    try:
+        _DISPATCH_OCR_CACHE.frame_ref = weakref.ref(frame)
+        _DISPATCH_OCR_CACHE.boxes = boxes
+    except TypeError:
+        clear_dispatch_page_cache()
+    return boxes
+
+
+def _dispatch_lines(frame: np.ndarray, roi):
+    '从派遣页一次OCR结果中取出指定子区域文字。'
+    x0, y0, x1, y1 = roi
+    out = []
+    for text, bx0, by0, bx1, by1 in _dispatch_page_boxes(frame):
+        cx = (bx0 + bx1) * 0.5
+        cy = (by0 + by1) * 0.5
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            out.append((text, cx, cy))
+    return out
+
+
+def _dispatch_text(frame: np.ndarray, roi) -> str:
+    return "".join(text for text, _, _ in _dispatch_lines(frame, roi))
+
+
+def read_dispatch_count(frame: np.ndarray) -> tuple[int, int] | None:
+    '读取「今日派遣 N/M」。'
+    text = _dispatch_text(frame, R.ROI_DISPATCH_COUNT)
+    match = re.search(r"(\d+)\s*/\s*(\d+)", text)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def read_dispatch_current_region(frame: np.ndarray) -> str | None:
+    '读取右上角当前选中的派遣地区。'
+    return _dispatch_region_name(_dispatch_text(frame, R.ROI_DISPATCH_CURRENT_REGION))
+
+
+def dispatch_daily_locked(frame: np.ndarray) -> bool:
+    '当前槽是否提示今日已经派遣、需要明日再来。'
+    text = _dispatch_text(frame, R.ROI_DISPATCH_DAILY_HINT)
+    return "明日再来" in text or "今日已派遣" in text
+
+
+def dispatch_region_point(frame: np.ndarray, target: str):
+    '返回地图地区文字上方的标记点击点，OCR失败时使用固定点。'
+    candidates = []
+    for text, cx, cy in _dispatch_lines(frame, R.ROI_DISPATCH_MAP_TEXT):
+        if _dispatch_region_name(text) == target:
+            candidates.append((cx, cy))
+    if candidates:
+        cx, cy = min(candidates, key=lambda item: abs(item[1] - 0.45))
+        return (cx, max(0.04, cy - R.DISPATCH_REGION_POINT_OFFSET_Y))
+    return R.PT_DISPATCH_REGION.get(target)
+
+
+def read_dispatched_regions(frame: np.ndarray) -> set[str]:
+    '读取地图上带倒计时或「已完成」队伍卡片所对应的地区。'
+    lines = _dispatch_lines(frame, R.ROI_DISPATCH_MAP_TEXT)
+    regions = []
+    statuses = []
+    for text, cx, cy in lines:
+        name = _dispatch_region_name(text)
+        if name:
+            regions.append((name, cx, cy))
+        if "已完成" in text or re.search(r"\d{1,2}:\d{2}:\d{2}", text):
+            statuses.append((cx, cy))
+
+    dispatched: set[str] = set()
+    for sx, sy in statuses:
+        below = [
+            (name, cx, cy) for name, cx, cy in regions
+            if 0.025 <= cy - sy <= 0.20 and abs(cx - sx) <= 0.12
+        ]
+        if below:
+            name, _, _ = min(
+                below, key=lambda item: (item[2] - sy) + abs(item[1] - sx) * 0.5)
+            dispatched.add(name)
+
+    if dispatch_daily_locked(frame):
+        current = read_dispatch_current_region(frame)
+        if current:
+            dispatched.add(current)
+    return dispatched
 
 
 def read_dispatch_slots(frame: np.ndarray) -> list[str]:
     "三槽位状态列表(自上而下),每项 ∈ {'done'(完成派遣,可领)/'idle'(空闲中,可派)/'busy'(倒计时)/'none'}。"
     out = []
     for roi in R.ROI_SLOT:
-        t = ocr_text(frame, roi)
+        t = _dispatch_text(frame, roi)
         if "完成" in t:
             out.append("done")
         elif "空闲" in t:
@@ -1119,7 +1233,7 @@ def read_dispatch_slots(frame: np.ndarray) -> list[str]:
 
 def read_dispatch_button(frame: np.ndarray):
     '右下三态大按钮 → (state, pt)。'
-    lines = ocr_lines(frame, R.ROI_DISPATCH_BTN)
+    lines = _dispatch_lines(frame, R.ROI_DISPATCH_BTN)
     t = "".join(x[0] for x in lines)
     def _pt(kw):
         return next(((cx, cy) for txt, cx, cy in lines if kw in txt), R.PT_DISPATCH_BTN)
@@ -1144,11 +1258,10 @@ _PET_RING_P80_MIN = 110
 _PET_CHECK_CENTER_MIN = 0.12  
 
 
-def pet_row_circle(frame: np.ndarray, row_idx: int) -> str:
-    "选择成员抽屉第 rowidx 行右端圆圈状态 ∈ {'empty'(空心=可选)/'checked'(打钩=已选)/'none'(无圈)}。"
+def _pet_row_circle_normalized(f: np.ndarray, row_idx: int) -> str:
+    '读取已经归一化的成员行圆圈状态。'
     if not (0 <= row_idx < len(R.PET_ROW_Y)):
         return "none"
-    f = normalize(frame)
     H, W = f.shape[:2]
     cx, cy = int(R.PT_PET_CIRCLE_X * W), int(R.PET_ROW_Y[row_idx] * H)
     r_out = int(round(32.0 / 1920 * W))
@@ -1161,7 +1274,7 @@ def pet_row_circle(frame: np.ndarray, row_idx: int) -> str:
     v = hsv[:, :, 2].astype(np.int32)
     s = hsv[:, :, 1].astype(np.int32)
     yy, xx = np.mgrid[0:box.shape[0], 0:box.shape[1]]
-    d = np.sqrt((yy - (cy - y0)) ** 2 + (xx - (cx - x0)) ** 2) / W * 1920.0  
+    d = np.sqrt((yy - (cy - y0)) ** 2 + (xx - (cx - x0)) ** 2) / W * 1920.0
     ring = (d >= 17) & (d <= 25)
     center = d <= 12
     if not ring.any() or not center.any():
@@ -1170,6 +1283,18 @@ def pet_row_circle(frame: np.ndarray, row_idx: int) -> str:
         return "none"
     center_bright = float(((v >= 170) & (s <= 90))[center].mean())
     return "checked" if center_bright >= _PET_CHECK_CENTER_MIN else "empty"
+
+
+def pet_row_circle(frame: np.ndarray, row_idx: int) -> str:
+    "选择成员抽屉第 rowidx 行右端圆圈状态 ∈ {'empty'(空心=可选)/'checked'(打钩=已选)/'none'(无圈)}。"
+    f = normalize(frame)
+    return _pet_row_circle_normalized(f, row_idx)
+
+
+def pet_row_circles(frame: np.ndarray) -> list[str]:
+    '一次归一化后读取全部成员行圆圈。'
+    f = normalize(frame)
+    return [_pet_row_circle_normalized(f, row) for row in range(len(R.PET_ROW_Y))]
 
 
 def reward_overlay(frame: np.ndarray) -> bool:
@@ -1194,8 +1319,18 @@ def dispatch_confirm_dialog(frame: np.ndarray):
 
 
 
+def photo_page(frame: np.ndarray) -> str:
+    '识别拍照流程当前页面。'
+    text = ocr_text(frame, R.ROI_CAMERA_TITLE)
+    if "分享" in text:
+        return "share"
+    if "相机" in text:
+        return "camera"
+    return ""
+
+
 def in_camera(frame: np.ndarray) -> bool:
-    return "相机" in ocr_text(frame, R.ROI_CAMERA_TITLE)
+    return photo_page(frame) == "camera"
 
 
 def camera_f_ready(frame: np.ndarray) -> bool:
@@ -1205,8 +1340,7 @@ def camera_f_ready(frame: np.ndarray) -> bool:
 
 def in_share_page(frame: np.ndarray) -> bool:
     '快门后自动进入「分享」页(拍照已成)。'
-    t = ocr_text(frame, R.ROI_SHARE_TITLE)
-    return "分享" in t
+    return photo_page(frame) == "share"
 
 
 
@@ -1306,10 +1440,10 @@ def _activity_reward_gold_score(frame: np.ndarray, cx: float) -> float:
     return float(np.count_nonzero(gold[border > 0])) / n if n else 0.0
 
 
-def find_claimable_activity_reward(frame: np.ndarray):
-    '从 9 个奖励格中返回第一个仍有金色边框的格；灰勾/未解锁均跳过。'
+def find_claimable_activity_reward(frame: np.ndarray, min_score: float = 0.18):
+    '返回第一个达到金边阈值的活跃奖励格。'
     for cx in R.ACTIVITY_REWARD_XS:
-        if _activity_reward_gold_score(frame, cx) >= 0.18:
+        if _activity_reward_gold_score(frame, cx) >= min_score:
             return (cx, R.PT_ACTIVITY_REWARD_Y)
     return None
 
