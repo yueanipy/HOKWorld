@@ -1,4 +1,4 @@
-'用户配置:设置页开关与本地路径。'
+'用户配置：设置页开关与本地路径。'
 from __future__ import annotations
 
 import copy
@@ -8,9 +8,13 @@ from pathlib import Path
 from runtime_guard import atomic_write_json, dev_log
 
 DEFAULTS = {
-    "timing_jitter": False,           
     "monthly_card_enabled": True,     
     "game_path": "",                  
+    "daily_auto_launch_game": True,   
+    "close_script_when_game_exits": False,  
+    "auto_water_interval_minutes": 90, 
+    "auto_water_close_game": False,    
+    "auto_water_shutdown_hours": 0,    
 }
 
 
@@ -56,10 +60,6 @@ class Config:
         self._d[key] = value
         if save:
             self.save()
-
-    def timing_jitter(self) -> bool:
-        return bool(self._d.get("timing_jitter"))
-
 
 
 cfg = Config()
