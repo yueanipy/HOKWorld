@@ -5,6 +5,62 @@ import daily.recognizer as rec
 from daily import navigation as nav
 from daily import regions as R
 from daily.base import DailyTask, TaskResult
+from runtime_guard import dev_log
+
+
+ACTIVITY_REWARD_STRONG_SCORE = 0.18
+ACTIVITY_REWARD_WEAK_SCORE = 0.12
+
+
+def _find_activity_reward_stable(ctx, attempts: int = 4, interval: float = 0.25):
+    '多帧读取活跃度和奖励；弱金边需连续两帧命中同一格。'
+    latest_activity = None
+    weak_point = None
+    weak_streak = 0
+
+    for attempt in range(attempts):
+        if ctx.should_stop():
+            break
+        frame = ctx.grab()
+        if frame is None:
+            if attempt + 1 < attempts:
+                ctx.sleep(interval)
+            continue
+        if rec.reward_overlay(frame):
+            _dismiss_reward_once(ctx, assume_visible=True)
+            if attempt + 1 < attempts:
+                ctx.sleep(interval)
+            continue
+
+        activity = rec.read_daily_activity(frame)
+        if activity is not None:
+            latest_activity = activity
+        strong = rec.find_claimable_activity_reward(
+            frame, min_score=ACTIVITY_REWARD_STRONG_SCORE)
+        weak = rec.find_claimable_activity_reward(
+            frame, min_score=ACTIVITY_REWARD_WEAK_SCORE)
+        dev_log(
+            f"[daily playbook] 奖励扫描 {attempt + 1}/{attempts} "
+            f"activity={activity} strong={strong} weak={weak}")
+        if strong is not None:
+            return latest_activity, strong
+
+        if weak is not None and weak == weak_point:
+            weak_streak += 1
+        elif weak is not None:
+            weak_point = weak
+            weak_streak = 1
+        else:
+            weak_point = None
+            weak_streak = 0
+        if weak_streak >= 2:
+            dev_log(f"[daily playbook] 弱金边连续确认 point={weak_point}")
+            return latest_activity, weak_point
+
+        if attempt + 1 < attempts:
+            ctx.sleep(interval)
+
+    return latest_activity, None
 
 
 def _enter_daily_from_hub(ctx, frame) -> bool:
@@ -98,6 +154,10 @@ class PlaybookClaimTask(DailyTask):
             ctx.sleep(0.65)
 
         
+        if claimed_tasks:
+            ctx.sleep(0.80)
+
+        
         
         for _ in range(12):
             if ctx.should_stop():
@@ -110,7 +170,9 @@ class PlaybookClaimTask(DailyTask):
                 if rec.reward_overlay(frame):
                     _dismiss_reward_once(ctx, assume_visible=True)
                     continue
-                break
+                _activity, pt = _find_activity_reward_stable(ctx)
+                if not pt:
+                    break
             if not ctx.click(pt):
                 return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
             claimed_rewards += 1
@@ -126,9 +188,7 @@ class PlaybookClaimTask(DailyTask):
         frame = ctx.grab()
         if frame is not None and rec.reward_overlay(frame):
             _dismiss_reward_once(ctx)
-            frame = ctx.grab()
-        activity = rec.read_daily_activity(frame) if frame is not None else None
-        remaining = rec.find_claimable_activity_reward(frame) if frame is not None else None
+        activity, remaining = _find_activity_reward_stable(ctx)
 
         if activity is not None and activity >= 120 and not remaining:
             ctx.log(
@@ -136,6 +196,9 @@ class PlaybookClaimTask(DailyTask):
                 f"(任务{claimed_tasks}处/奖励点击{claimed_rewards}次),停留当前界面")
             return TaskResult.SUCCESS
         if not remaining:
+            if activity is None:
+                ctx.log("朝闻道:最终活跃度未识别,不能确认奖励领取完成")
+                return TaskResult.FAIL
             ctx.log(
                 f"朝闻道:当前无金色可领取奖励,活跃度={activity if activity is not None else '未识别'};"
                 "保持当前界面")
