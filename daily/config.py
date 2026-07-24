@@ -20,8 +20,29 @@ TASK_REGISTRY: dict[str, str] = {
     "alchemy": "制药",
 }
 
-DEFAULT_ORDER = list(TASK_REGISTRY.keys())     
+DEFAULT_ORDER = [
+    "farm",
+    "incubator",
+    "dispatch",
+    "pet_feeding",
+    "photo",
+    "interest_like",
+    "friends",
+    "daily_fishing",
+    "cooking",
+    "alchemy",
+    "playbook_claim",
+]
 DEFAULT_ENABLED: set[str] = set()
+
+DISPATCH_REGIONS: tuple[str, ...] = (
+    "稷下学院", "秘禁之地", "稷下前山", "梦语湖", "界北", "彩云盆地",
+    "观星群山", "织梦原", "奇门秘境", "春溪原", "龙旗谷", "西云落高地",
+    "春溪古战场", "东云落高地",
+)
+DEFAULT_DISPATCH_REGIONS: tuple[str, str, str] = (
+    "东云落高地", "春溪原", "彩云盆地",
+)
 
 
 def _config_path() -> Path:
@@ -105,6 +126,27 @@ class DailyConfig:
     def set_param(self, task_id: str, key: str, value) -> None:
         self._d["params"].setdefault(task_id, {})[key] = value
         self.save()
+
+    def dispatch_regions(self) -> list[str]:
+        '返回三个互不重复的宠物派遣地区。'
+        raw = self.param("dispatch", "regions", DEFAULT_DISPATCH_REGIONS)
+        values = raw if isinstance(raw, (list, tuple)) else ()
+        selected: list[str] = []
+        for name in (*values, *DEFAULT_DISPATCH_REGIONS, *DISPATCH_REGIONS):
+            name = str(name)
+            if name in DISPATCH_REGIONS and name not in selected:
+                selected.append(name)
+            if len(selected) >= 3:
+                break
+        return selected
+
+    def set_dispatch_regions(self, regions) -> None:
+        '保存三个互不重复的宠物派遣地区。'
+        selected = [str(name) for name in regions]
+        if (len(selected) != 3 or len(set(selected)) != 3
+                or any(name not in DISPATCH_REGIONS for name in selected)):
+            raise ValueError("宠物派遣地区必须是三个不同的有效地区")
+        self.set_param("dispatch", "regions", selected)
 
     def run_list(self) -> list[str]:
         '最终要跑的任务(按 order,滤掉未启用)。'
