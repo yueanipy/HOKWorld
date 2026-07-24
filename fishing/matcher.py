@@ -36,7 +36,7 @@ class _SerializedOCR:
 
 
 def _limit_ocr_threads() -> None:
-    '把 RapidOCR 三个 onnxruntime 会话的 intra 线程压到 2(默认=物理核数。'
+    '把 RapidOCR 三个 onnxruntime 会话的 intra 线程限制为 3。'
     try:
         import rapidocr_onnxruntime.utils as _ru
         from onnxruntime import SessionOptions as _SO
@@ -44,7 +44,7 @@ def _limit_ocr_threads() -> None:
             return                       
         def _capped(*a, **k):
             so = _SO(*a, **k)
-            so.intra_op_num_threads = 2
+            so.intra_op_num_threads = 3
             so.inter_op_num_threads = 1
             return so
         _ru.SessionOptions = _capped     
@@ -74,6 +74,7 @@ ROI_BUTTON = (0.90, 0.85, 0.978, 0.97)
 ROI_BANNER = (0.43, 0.27, 0.57, 0.38)    
 ROI_SUCCESS = (0.0, 0.45, 0.30, 0.75)    
 ROI_CAST_MSG = (0.26, 0.15, 0.74, 0.28)  
+ROI_BAIT_PANEL = (0.42, 0.00, 0.99, 0.68) 
 ROI_LEVELCAP = (0.28, 0.36, 0.72, 0.60)  
 ROI_FBAG = (0.70, 0.83, 0.99, 0.96)      
 ROI_QTE = (0.20, 0.06, 0.84, 0.50)       
@@ -233,6 +234,10 @@ class FishingRecognizer:
         t = self._ocr_text(frame[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)])
         if not t:
             return None
+        if "鱼饵" in t and ("不对" in t or "换个" in t):
+            return "bait_wrong"
+        if "需要装备鱼饵" in t or "鱼饵不足" in t:
+            return "bait_empty"
         if "过近" in t:
             return "too_close"
         if "超出" in t or "落杆范围" in t:
@@ -242,6 +247,65 @@ class FishingRecognizer:
         if "深度不足" in t or "过浅" in t:
             return "shallow"
         return None
+
+    def bait_panel_lines(self, frame: np.ndarray) -> list[tuple[str, float, float]]:
+        '读取鱼饵面板文字及全屏归一化中心坐标。'
+        f = self.bank.norm(frame)
+        h, w = f.shape[:2]
+        x0, y0, x1, y1 = ROI_BAIT_PANEL
+        left, top = int(x0 * w), int(y0 * h)
+        sub = f[top:int(y1 * h), left:int(x1 * w)]
+        if sub.size == 0:
+            return []
+        try:
+            res, _ = _get_ocr()(sub)
+        except Exception:
+            return []
+        lines = []
+        for item in res or []:
+            try:
+                box, text, score = item[0], str(item[1]).strip(), float(item[2])
+            except (IndexError, ValueError, TypeError):
+                continue
+            if not text or score < 0.5:
+                continue
+            cx = (left + sum(p[0] for p in box) / len(box)) / w
+            cy = (top + sum(p[1] for p in box) / len(box)) / h
+            lines.append((text, float(cx), float(cy)))
+        return lines
+
+    def bait_panel_state(self, frame: np.ndarray) -> dict:
+        '返回鱼饵面板、允许鱼饵位置、当前鱼饵和使用按钮。'
+        lines = self.bait_panel_lines(frame)
+        opened = any("更换渔具" in text for text, _, _ in lines)
+        allowed = {}
+        all_baits = {}
+        for name in ("普通鱼饵", "浓香拟饵", "赵大顺的鱼饵"):
+            item = next(((x, y) for text, x, y in lines if name in text), None)
+            if item is not None:
+                all_baits[name] = item
+                if name != "赵大顺的鱼饵":
+                    allowed[name] = item
+        current = None
+        using = next(((x, y) for text, x, y in lines if "使用中" in text), None)
+        if using is not None and all_baits:
+            nearest = min(all_baits, key=lambda name: abs(all_baits[name][1] - using[1]))
+            if abs(all_baits[nearest][1] - using[1]) <= 0.055 and nearest in allowed:
+                current = nearest
+        use_point = next(
+            ((x, y) for text, x, y in lines if text == "使用"), None)
+        unavailable = set()
+        for name, (_, row_y) in allowed.items():
+            if any("未获得" in text and abs(y - row_y) < 0.075
+                   for text, _, y in lines):
+                unavailable.add(name)
+        return {
+            "open": opened,
+            "allowed": allowed,
+            "current": current,
+            "use_point": use_point,
+            "unavailable": unavailable,
+        }
 
     def is_level_cap(self, frame: np.ndarray) -> bool:
         '"已达到等级上限"弹窗(屏幕中央)。'
