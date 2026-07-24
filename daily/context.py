@@ -22,13 +22,17 @@ VK = {
 
 
 class DailyContext:
-    def __init__(self, log=print) -> None:
+    def __init__(self, log=print, stop_deadline: float | None = None) -> None:
         self.log = log
         self.stop_flag = False
+        self.stop_reason = ""
+        self._stop_deadline = stop_deadline
+        self._deadline_logged = False
         self.paused = False
         self._pause_lock = threading.Lock()
         self._paused_total = 0.0
         self._pause_started: float | None = None
+        self._foreground_paused = False
         self._hwnd: int | None = None
         self._cap: GameCapture | None = None
         self._hwnd_lock = threading.RLock()
@@ -67,9 +71,29 @@ class DailyContext:
             self._cap = None
         release_known_keys(self.log)
 
-    def stop(self) -> None:
+    def stop(self, reason: str = "requested") -> None:
+        if not self.stop_reason:
+            self.stop_reason = str(reason)
         self.stop_flag = True
         release_known_keys(self.log)
+
+    def set_stop_deadline(self, deadline: float | None) -> None:
+        '设置不受失焦和暂停影响的墙钟截止点。'
+        self._stop_deadline = deadline
+        self._deadline_logged = False
+
+    def _deadline_reached(self) -> bool:
+        deadline = self._stop_deadline
+        if deadline is None or time.monotonic() < deadline:
+            return False
+        if not self.stop_reason:
+            self.stop_reason = "deadline"
+        self.stop_flag = True
+        if not self._deadline_logged:
+            self._deadline_logged = True
+            self.log("本轮任务已到计划截止时间 → 停止旧轮")
+            release_known_keys(self.log)
+        return True
 
     def set_paused(self, on: bool) -> None:
         on = bool(on)
@@ -77,14 +101,46 @@ class DailyContext:
             if self.paused == on:
                 return
             now = time.monotonic()
-            if on:
+            was_suspended = self.paused or self._foreground_paused
+            self.paused = on
+            is_suspended = self.paused or self._foreground_paused
+            if not was_suspended and is_suspended:
                 self._pause_started = now
-            elif self._pause_started is not None:
+            elif was_suspended and not is_suspended and self._pause_started is not None:
                 self._paused_total += now - self._pause_started
                 self._pause_started = None
-            self.paused = on
         if on:
             release_known_keys(self.log)
+
+    def _set_foreground_paused(self, on: bool) -> bool:
+        '把失焦作为逻辑暂停源，返回状态是否发生变化。'
+        on = bool(on)
+        with self._pause_lock:
+            if self._foreground_paused == on:
+                return False
+            now = time.monotonic()
+            was_suspended = self.paused or self._foreground_paused
+            self._foreground_paused = on
+            is_suspended = self.paused or self._foreground_paused
+            if not was_suspended and is_suspended:
+                self._pause_started = now
+            elif was_suspended and not is_suspended and self._pause_started is not None:
+                self._paused_total += now - self._pause_started
+                self._pause_started = None
+            return True
+
+    def _note_foreground_lost(self) -> None:
+        '首次发现失焦时释放输入并记录，不主动抢回游戏。'
+        if self._set_foreground_paused(True):
+            release_known_keys(self.log)
+            self.log("游戏已离开前台，自动暂停当前步骤；切回后继续")
+            dev_log("[daily] 运行中失去游戏前台，逻辑时钟已冻结")
+
+    def _note_foreground_restored(self) -> None:
+        '结束本次失焦暂停。'
+        if self._set_foreground_paused(False):
+            self.log("游戏已回到前台，从当前步骤继续")
+            dev_log("[daily] 游戏前台恢复，逻辑时钟继续")
 
     def _clock(self) -> float:
         '排除暂停时长的单调逻辑时钟。'
@@ -99,17 +155,18 @@ class DailyContext:
 
     
     def should_stop(self) -> bool:
-        '停止条件:用户停 / 游戏窗口没了。'
-        if self.stop_flag:
+        '停止条件:用户停止、计划截止或游戏窗口消失。'
+        if self.stop_flag or self._deadline_reached():
             return True
         if not find_game_hwnd():
             self.log("游戏窗口消失 → 停止一条龙")
+            self.stop_reason = "game_closed"
             self.stop_flag = True
             return True
         return False
 
     def _stopped(self) -> bool:
-        return bool(self.stop_flag or self.paused)
+        return bool(self.stop_flag or self.paused or self._deadline_reached())
 
     def foreground(self) -> bool:
         '判断游戏是否在前台，并修正最小化交接期间缓存的旧句柄。'
@@ -132,29 +189,32 @@ class DailyContext:
 
     def action_ready(self) -> bool:
         '当前是否仍可安全输入；长按闭环必须持续复查，不能只在按下前检查一次。'
-        return bool(not self._stopped() and input_allowed() and self.foreground())
+        if self._stopped() or not input_allowed():
+            return False
+        if not self.foreground():
+            self._note_foreground_lost()
+            return False
+        self._note_foreground_restored()
+        return True
 
-    def wait_foreground(self, timeout: float = 30.0) -> bool:
+    def wait_foreground(self, timeout: float | None = 30.0) -> bool:
         '等待游戏真正取得前台。'
-        end = self._clock() + max(0.0, timeout)
-        warned = False
-        while self._clock() < end:
+        end = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        while end is None or time.monotonic() < end:
             if self.should_stop():
+                self._set_foreground_paused(False)
                 return False
             if self.paused:
                 time.sleep(0.10)
                 continue
             if self.foreground():
-                if warned:
-                    self.log("游戏已回到前台，继续每日任务")
+                self._note_foreground_restored()
                 return True
-            if not warned:
-                self.log("等待游戏回到前台；脚本不会重复抢前台")
-                dev_log("[daily] 等待游戏前台，首个输入尚未发送")
-                warned = True
+            self._note_foreground_lost()
             time.sleep(0.10)
-        self.log(f"等待游戏前台超时({timeout:.0f}秒)，本任务停止")
-        dev_log(f"[daily] 等待游戏前台超时 {timeout:.0f}s")
+        self._set_foreground_paused(False)
+        self.log(f"等待游戏前台超时({float(timeout):.0f}秒)，本任务停止")
+        dev_log(f"[daily] 等待游戏前台超时 {float(timeout):.0f}s")
         return False
 
     @property
@@ -164,17 +224,15 @@ class DailyContext:
 
     def _action_hwnd(self) -> int | None:
         '先修正前台句柄，再给坐标类输入返回同一个有效 hwnd。'
-        if not self.foreground():
+        if not self.wait_foreground(timeout=None):
             return None
         return self.hwnd
 
     
     def grab(self):
-        '抓一帧整客户区 BGR(4K);识别函数内部会归一化到 1920。'
-        while self.paused and not self.should_stop():
-            time.sleep(0.2)
-        
-        self.foreground()
+        '只在游戏前台抓帧；失焦时冻结当前步骤并等待用户切回。'
+        if not self.wait_foreground(timeout=None):
+            return None
         with self._hwnd_lock:
             cap = self._cap
         if cap is None:
@@ -185,7 +243,10 @@ class DailyContext:
         '暂停时立即返回 None，不阻塞在长按键上下文内，便于先抬键再等待恢复。'
         if self.paused or self.should_stop() or self._cap is None:
             return None
-        self.foreground()
+        if not self.foreground():
+            self._note_foreground_lost()
+            return None
+        self._note_foreground_restored()
         with self._hwnd_lock:
             cap = self._cap
         return None if cap is None else cap.grab()
@@ -195,10 +256,18 @@ class DailyContext:
         '点归一化坐标(仅前台+未停止时;不走弧线直接点)。'
         if pt is None:
             return False
-        hwnd = self._action_hwnd()
-        if not hwnd:
+        while True:
+            hwnd = self._action_hwnd()
+            if not hwnd:
+                return False
+            if safe_click_norm(hwnd, pt, self._stopped, self.foreground, self.log, 0.02):
+                return True
+            if self.should_stop() or not input_allowed():
+                return False
+            if self.paused or not self.foreground():
+                self._note_foreground_lost()
+                continue
             return False
-        return safe_click_norm(hwnd, pt, self._stopped, self.foreground, self.log, 0.02)
 
     def drag(self, start, end, duration_s: float = 0.5) -> bool:
         '按住左键从 start 拖到 end(好友列表翻页等 UI 拖动)。'
@@ -222,7 +291,42 @@ class DailyContext:
         if vk is None:
             self.log(f"未知按键 {key!r}")
             return False
-        return safe_press_key(vk, self._stopped, self.foreground, self.log, hold_s)
+        duration = max(0.0, float(hold_s))
+        if duration <= 0.10:
+            while self.wait_foreground(timeout=None):
+                if safe_press_key(vk, self._stopped, self.foreground, self.log, duration):
+                    return True
+                if self.should_stop() or not input_allowed():
+                    return False
+                if self.paused or not self.foreground():
+                    self._note_foreground_lost()
+                    continue
+                return False
+            return False
+
+        
+        remaining = duration
+        while remaining > 0.0 and self.wait_foreground(timeout=None):
+            segment_started = time.monotonic()
+            with safe_hold_key(vk, self._stopped, self.foreground, self.log) as held:
+                if not held:
+                    if self.should_stop() or not input_allowed():
+                        return False
+                    continue
+                while remaining > 0.0:
+                    if self.should_stop() or not input_allowed():
+                        return False
+                    if not self.foreground():
+                        self._note_foreground_lost()
+                        break
+                    elapsed = time.monotonic() - segment_started
+                    if elapsed >= remaining:
+                        remaining = 0.0
+                        break
+                    time.sleep(min(0.02, remaining - elapsed))
+                elapsed = min(remaining, time.monotonic() - segment_started)
+            remaining = max(0.0, remaining - elapsed)
+        return remaining <= 0.0
 
     @contextmanager
     def hold(self, key: str):
@@ -230,6 +334,9 @@ class DailyContext:
         vk = VK.get(key.lower())
         if vk is None:
             self.log(f"未知按键 {key!r}")
+            yield False
+            return
+        if not self.wait_foreground(timeout=None):
             yield False
             return
         with safe_hold_key(vk, self._stopped, self.foreground, self.log) as held:
@@ -246,13 +353,14 @@ class DailyContext:
 
     def center_camera(self) -> bool:
         '镜头回正:屏幕中央点一次中键(同类脚本 centercamera 同款。'
-        if not (input_allowed() and self.foreground() and not self._stopped()):
+        hwnd = self._action_hwnd()
+        if not hwnd or not input_allowed() or self._stopped():
             return False
         import win32api
         import win32con
         try:
             from winenv import client_rect_on_screen
-            x, y, w, h = client_rect_on_screen(self._hwnd)
+            x, y, w, h = client_rect_on_screen(hwnd)
             if w <= 0 or h <= 0:
                 return False
             win32api.SetCursorPos((int(x + w * 0.5), int(y + h * 0.5)))
@@ -278,9 +386,7 @@ class DailyContext:
 
     def drag_camera(self, dx_px: int, steps: int = 12, dy_px: int = 0) -> bool:
         '转视角:注入鼠标相对移动(负 dx=左转,负 dy=向上看),分步小幅更像人手。'
-        if not (input_allowed() and self.foreground() and not self._stopped()):
-            dev_log(f"drag_camera 跳过:前台={self.foreground()} stop={self.stop_flag} paused={self.paused}"
-                    "(传送加载/失焦时会走到这——20260712 实测偶发'传送后不转视角'的可见化)")
+        if not self.wait_foreground(timeout=None) or not input_allowed() or self._stopped():
             return False
         import win32api
         import win32con
@@ -290,7 +396,9 @@ class DailyContext:
             moved_x = 0
             moved_y = 0
             for i in range(steps):
-                if self._stopped() or not input_allowed() or not self.foreground():
+                if self.should_stop() or not input_allowed():
+                    return False
+                if not self.wait_foreground(timeout=None):
                     return False
                 mx = dx_px - moved_x if i == steps - 1 else step_x
                 my = dy_px - moved_y if i == steps - 1 else step_y
