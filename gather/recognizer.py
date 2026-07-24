@@ -7,7 +7,10 @@ import cv2
 import numpy as np
 
 from fishing.matcher import _get_ocr
-from fishing.template_bank import FAST_SCALES, PREPROCESS, TemplateBank, crop, match_scales
+from fishing.template_bank import (
+    FAST_SCALES, TemplateBank, crop, match_prepared_scales, preprocess_box,
+    preprocess_crop,
+)
 from runtime_guard import atomic_write_text, dev_log
 
 HERE = Path(__file__).resolve().parent
@@ -33,6 +36,9 @@ ROI_TEXT = (0.53, 0.45, 0.82, 0.63)
 
 
 GATHER_REGION = (0.47, 0.39, 0.87, 0.71)
+
+
+GATHER_FAST_REGION = (0.52, 0.43, 0.70, 0.67)
 PICK_F_TH = 0.80                       
 ICON_TH = 0.72                         
 CX_TH = 0.68                           
@@ -43,7 +49,7 @@ MIN_CONF = 0.45
 _SEED_BLACKLIST = (
     "渡石", "语印", "捕获", "启动滑索", "松开滑索", "启动冲云翼", "铸星",
     "牵引", "释放", "安置", "设置休息时间", "长按修复", "启动", "解锁牧场", "手动重置", "坐下",
-    "顶层", "底层", "使用望远镜",
+    "顶层", "底层", "使用望远镜", "转动",
 )
 _ICONS = ("pick_f.png", "icon_pick.png", "icon_chongxian.png")
 
@@ -148,30 +154,23 @@ class GatherRecognizer:
         h, w = f_norm.shape[:2]
         x0, y0, _, _ = t.roi
         ox, oy = int(x0 * w), int(y0 * h)
-        sub = PREPROCESS[t.pre](crop(f_norm, t.roi))
-        tpl = t.tpl
-        if sub is None or sub.size == 0 or tpl.size == 0:
+        sub = preprocess_crop(f_norm, t.roi, t.pre)
+        if sub is None or sub.size == 0 or not t.prepared:
             return (0.0, 0, 0, 0, 0)
         best = (0.0, 0, 0, 0, 0)
-        for s in t.scales:
-            th, tw = int(tpl.shape[0] * s), int(tpl.shape[1] * s)
-            if th < 8 or tw < 8 or th > sub.shape[0] or tw > sub.shape[1]:
+        for scaled_tpl, _ in t.prepared:
+            th, tw = scaled_tpl.shape[:2]
+            if th > sub.shape[0] or tw > sub.shape[1]:
                 continue
-            r = cv2.matchTemplate(sub, cv2.resize(tpl, (tw, th)), cv2.TM_CCOEFF_NORMED)
+            r = cv2.matchTemplate(sub, scaled_tpl, cv2.TM_CCOEFF_NORMED)
             _, mx, _, loc = cv2.minMaxLoc(r)
             if mx > best[0]:
                 best = (float(mx), ox + loc[0], oy + loc[1], tw, th)
         return best
 
-    def _icon_score(self, name: str, f_norm: np.ndarray, box) -> float:
-        '在像素 box=(x0,y0,x1,y1) 内匹配某图标模板,返回最佳分(box 由 F 键帽锚出 → 只看激活提示那一行)。'
-        t = self.bank._t[name]
-        h, w = f_norm.shape[:2]
-        x0, y0, x1, y1 = box
-        sub = f_norm[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
-        if sub.size == 0:
-            return 0.0
-        return match_scales(PREPROCESS[t.pre](sub), t.tpl, t.scales)
+    def _icon_score(self, name: str, preprocessed: np.ndarray) -> float:
+        '在已预处理的当前激活提示图标框内匹配模板。'
+        return match_prepared_scales(preprocessed, self.bank._t[name].prepared)
 
     
     def classify(self, frame: np.ndarray):
@@ -187,9 +186,16 @@ class GatherRecognizer:
         h, w = f.shape[:2]
         pad = max(2, int(kh * 0.3))
         box = (int(ROI_ICON[0] * w), ky - pad, int(ROI_ICON[2] * w), ky + kh + pad)
-        if self._icon_score("icon_pick", f, box) >= ICON_TH:
+        pick_tpl = self.bank._t["icon_pick"]
+        chongxian_tpl = self.bank._t["icon_chongxian"]
+        pick_sub = preprocess_box(f, box, pick_tpl.pre)
+        if pick_sub.size == 0:
+            return ("other", f)
+        if self._icon_score("icon_pick", pick_sub) >= ICON_TH:
             return ("pick", f)
-        if self._icon_score("icon_chongxian", f, box) >= CX_TH:
+        chongxian_sub = (pick_sub if chongxian_tpl.pre == pick_tpl.pre
+                         else preprocess_box(f, box, chongxian_tpl.pre))
+        if self._icon_score("icon_chongxian", chongxian_sub) >= CX_TH:
             return ("chongxian", f)
         return ("other", f)
 
