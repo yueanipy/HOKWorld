@@ -159,3 +159,36 @@ class MonthlyCardWatcher:
             atomic_write_json(self._path, {"done_date": self._done_date})
         except Exception as exc:
             dev_log("月卡状态保存失败", exc)
+
+
+def handle_monthly_card_once(context, log=print,
+                             watcher_factory: Callable | None = None) -> str:
+    '用现有月卡识别器检查一次，命中时点击空白处并立即返回。'
+    factory = watcher_factory or (lambda: MonthlyCardWatcher(True, log))
+    watcher = factory()
+    try:
+        if watcher.done_today:
+            return "done"
+        frame = context.grab()
+        if frame is None:
+            return "pending"
+        state, hits = watcher.classify(frame)
+        if state == "hud":
+            watcher.mark_hud_reached()
+            return "hud"
+        if state != "monthly":
+            return "pending"
+        if not context.click(CLICK_POINT):
+            return "click_failed"
+
+        watcher.mark_clicked()
+        log("检测到月卡界面，已点击左侧空白处")
+        context.sleep(1.0)
+        follow = context.grab()
+        if follow is not None:
+            follow_state, _hits = watcher.classify(follow)
+            if follow_state == "hud":
+                watcher.mark_hud_reached()
+        return "clicked"
+    finally:
+        watcher.close()
