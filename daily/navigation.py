@@ -94,7 +94,7 @@ def enter_manage_map(ctx, timeout: float = 12.0) -> bool:
 
 
 def teleport_via_node(ctx, node_pt, timeout: float = 15.0) -> bool:
-    '在管理地图点某设施节点 → 传送确认弹窗 → 确定 → 等回到世界(弹窗消失且离开管理页)。'
+    '在管理地图传送到设施，并等待角色 HUD 连续稳定出现。'
     ctx.click(node_pt)
     dlg = ctx.wait_until(lambda f: rec.teleport_dialog(f)[0], timeout=6.0, desc="传送确认弹窗")
     if not dlg:
@@ -103,5 +103,23 @@ def teleport_via_node(ctx, node_pt, timeout: float = 15.0) -> bool:
     confirm_pt = rec.teleport_dialog(f)[2] if f is not None else R.PT_DIALOG_CONFIRM
     ctx.click(confirm_pt or R.PT_DIALOG_CONFIRM)
     
-    return bool(ctx.wait_until(lambda f: not rec.in_manage_map(f) and not rec.teleport_dialog(f)[0],
-                               timeout=timeout, desc="传送到达"))
+    
+    hud_streak = 0
+
+    def arrived(frame) -> bool:
+        nonlocal hud_streak
+        if rec.in_manage_map(frame) or rec.teleport_dialog(frame)[0]:
+            hud_streak = 0
+            return False
+        if not rec.in_world_hud(frame):
+            hud_streak = 0
+            return False
+        hud_streak += 1
+        return hud_streak >= 2
+
+    ok = bool(ctx.wait_until(
+        arrived, timeout=timeout, interval=0.20, desc="传送完成并恢复角色HUD"))
+    dev_log(f"[daily] 管理节点传送完成判定 hud_streak={hud_streak} ok={ok}")
+    if ok:
+        ctx.sleep(0.25)
+    return ok
