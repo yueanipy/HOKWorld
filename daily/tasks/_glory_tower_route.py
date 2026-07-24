@@ -277,7 +277,7 @@ class GloryTowerRouteTask(DailyTask):
         return ctx.press(spec.recovery_side, hold_s=0.08)
 
     def _recover_climb_overshoot(self, stop_word: str, *, release_climb: bool) -> bool:
-        '制药第二阶段纠偏；只有画面出现 C 时才先按 C 脱离攀爬。'
+        '制作台第二阶段纠偏；只有画面出现 C 时才先按 C 脱离攀爬。'
         ctx = self.ctx
         spec = self.route
         if spec is None:
@@ -331,7 +331,7 @@ class GloryTowerRouteTask(DailyTask):
         return False
 
     def _climb_stage_frame_state(self, frame, stop_word: str) -> tuple[str, str]:
-        '制药第二阶段的单一视觉优先级：C 高于制作台提示。'
+        '制作台第二阶段的单一视觉优先级：C 高于制作台提示。'
         if frame is None:
             return "search", ""
         if rec.climb_key_visible(frame):
@@ -348,14 +348,14 @@ class GloryTowerRouteTask(DailyTask):
             self._arrival_frame = frame
             return "target", prompt
         if stop_word in prompt:
-            dev_log(f"[glory route] {self.task_id} 制药文字候选无 F 键帽，"
+            dev_log(f"[glory route] {self.task_id} {stop_word}文字候选无 F 键帽，"
                     f"继续第二阶段 prompt={prompt!r}")
         return "search", prompt
 
     def _run_climb_aware_second_stage(
             self, stop_word: str, stages: tuple[int, ...],
             movement_timeout_s: float, failure_timeout_s: float) -> bool:
-        '制药专用第二阶段。'
+        '制作台通用的攀爬感知第二阶段。'
         ctx = self.ctx
         max_turn = sum(abs(dx) for dx in stages)
         turned = 0
@@ -363,7 +363,7 @@ class GloryTowerRouteTask(DailyTask):
         
         entry_frame = ctx.grab_nowait()
         entry_state, entry_prompt = self._climb_stage_frame_state(entry_frame, stop_word)
-        dev_log(f"[glory route] {self.task_id} 制药第二阶段入口 "
+        dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段入口 "
                 f"state={entry_state} prompt={entry_prompt!r}")
         if entry_state == "climb":
             return self._recover_climb_overshoot(stop_word, release_climb=True)
@@ -389,7 +389,7 @@ class GloryTowerRouteTask(DailyTask):
             time.sleep(0.04)
             frame = ctx.grab_nowait()
             state, prompt = self._climb_stage_frame_state(frame, stop_word)
-            dev_log(f"[glory route] {self.task_id} 制药第二阶段首层 "
+            dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段首层 "
                     f"turned={turned}/{max_turn}px state={state} prompt={prompt!r}")
             if state == "climb":
                 return self._recover_climb_overshoot(stop_word, release_climb=True)
@@ -412,7 +412,7 @@ class GloryTowerRouteTask(DailyTask):
             if not held:
                 return False
             phase_started_at = ctx.logical_time()
-            dev_log(f"[glory route] {self.task_id} 制药第二阶段 W 开始 "
+            dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段 W 开始 "
                     f"walk_limit={movement_timeout_s:.2f}s failure_limit={failure_timeout_s:.2f}s")
             while not ctx.should_stop():
                 if ctx.paused:
@@ -437,7 +437,7 @@ class GloryTowerRouteTask(DailyTask):
                     return False
                 stage_remaining -= abs(chunk)
                 turned += abs(chunk)
-                dev_log(f"[glory route] {self.task_id} 制药第二阶段 W边走边转 "
+                dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段 W边走边转 "
                         f"elapsed={elapsed:.2f}s stage={stage_index + 1}/{len(stages)} "
                         f"turned={turned}/{max_turn}px dx={chunk} prompt={prompt!r}")
                 if stage_remaining <= 0:
@@ -449,7 +449,7 @@ class GloryTowerRouteTask(DailyTask):
 
         
         elapsed = max(0.0, ctx.logical_time() - phase_started_at)
-        dev_log(f"[glory route] {self.task_id} 制药第二阶段 W 已释放 "
+        dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段 W 已释放 "
                 f"elapsed={elapsed:.2f}s state={state} turned={turned}/{max_turn}px")
         if state == "climb":
             return self._recover_climb_overshoot(stop_word, release_climb=True)
@@ -474,7 +474,7 @@ class GloryTowerRouteTask(DailyTask):
 
         if ctx.should_stop() or not ctx.action_ready():
             return False
-        dev_log(f"[glory route] {self.task_id} 制药第二阶段达到3秒且无C，直接碎步恢复")
+        dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段达到3秒且无C，直接碎步恢复")
         return self._recover_climb_overshoot(stop_word, release_climb=False)
 
     def _turn_from_telescope_until_target(self, stop_word: str) -> bool:
