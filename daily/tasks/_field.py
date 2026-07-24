@@ -29,6 +29,10 @@ class FieldTask(DailyTask):
     ACTION_RING_PREFILTER_RATIO = 0.33  
     POST_ACTION_RECHECKS = 2       
     POST_ACTION_RECHECK_S = 0.25
+    POST_WATER_RECHECKS = 1        
+    MAX_WATER_CYCLES_PER_PLOT = 3  
+    MAX_ACTION_STEPS_PER_PLOT = 8  
+    CONTINUE_AFTER_WATER = False   
     FIELD_EXIT_MISSES = 3          
     ACTION_KIND_WATER_TH = rec.WATER_ACTION_TH  
     GAP_TAPS = 5                   
@@ -126,6 +130,22 @@ class FieldTask(DailyTask):
         valid = self._action_evidence_valid(expected_kind)
         self._action_evidence = None
         return valid
+
+    def _post_water_followup(self, kind: str, same_state_checks: int) -> tuple[str, int]:
+        '判断浇水后的同格状态，避免把水壶残影当成下一次浇水。'
+        from runtime_guard import dev_log
+
+        if kind in ("harvest", "plant"):
+            dev_log(f"[daily] {self.name}: 浇水后同格切换为 {kind}，开启下一轮操作")
+            return "new_cycle", 0
+        if kind == "water" and same_state_checks < self.POST_WATER_RECHECKS:
+            self.ctx.sleep(self.POST_ACTION_RECHECK_S)
+            dev_log(f"[daily] {self.name}: 浇水后仍显示水壶，短复查后再决定是否前进")
+            return "retry", same_state_checks + 1
+        if kind == "water":
+            dev_log(f"[daily] {self.name}: 浇水后水壶持续未切换，按残影处理并结束本格")
+            return "finished", same_state_checks
+        return "unknown", same_state_checks
 
     def _cfg_rows(self, v) -> None:
         self.MAX_ROWS = max(1, min(40, int(v)))    
@@ -938,10 +958,12 @@ class FieldTask(DailyTask):
             ctx.log(f"{self.name}:第 {row} 行(上限 {self.MAX_ROWS})")
             
             
-            
             done_ops: set = set()
             did_any, none_waits, harvest_clicked = False, 0, False
-            for _ in range(8):                       
+            after_water = False
+            water_cycles = 0
+            same_water_checks = 0
+            for _ in range(self.MAX_ACTION_STEPS_PER_PLOT):
                 if ctx.should_stop():
                     return TaskResult.ABORT
                 expect_plant = (can_plant and "harvest" in done_ops and "plant" not in done_ops)
@@ -953,7 +975,9 @@ class FieldTask(DailyTask):
                         continue
                     
                     
-                    if did_any and none_waits < self.POST_ACTION_RECHECKS:
+                    recheck_limit = (self.POST_WATER_RECHECKS if after_water
+                                     else self.POST_ACTION_RECHECKS)
+                    if did_any and none_waits < recheck_limit:
                         none_waits += 1
                         ctx.sleep(self.POST_ACTION_RECHECK_S)
                         continue
@@ -961,6 +985,17 @@ class FieldTask(DailyTask):
                         ctx.log(f"{self.name}:第 {row} 行 灰暗不可操作 → 跳过")
                     break                            
                 none_waits = 0
+                if after_water:
+                    decision, same_water_checks = self._post_water_followup(
+                        kind, same_water_checks)
+                    if decision == "retry":
+                        continue
+                    if decision == "finished":
+                        break
+                    if decision == "new_cycle":
+                        done_ops.clear()
+                        harvest_clicked = False
+                        after_water = False
                 if kind == "harvest":
                     if not self.DO_HARVEST or "harvest" in done_ops:
                         break                        
@@ -983,12 +1018,19 @@ class FieldTask(DailyTask):
                     done_ops.add("plant")
                     did_any = True
                     continue                         
-                
                 if self.DO_WATER:
                     if self._water_here():
-                        done_ops.add("water")
                         did_any = True
-                        break
+                        if not self.CONTINUE_AFTER_WATER:
+                            break
+                        water_cycles += 1
+                        if water_cycles >= self.MAX_WATER_CYCLES_PER_PLOT:
+                            ctx.log(f"{self.name}:第 {row} 行达到同格浇水循环上限"
+                                    f" {self.MAX_WATER_CYCLES_PER_PLOT} → 前进")
+                            break
+                        after_water = True
+                        same_water_checks = 0
+                        continue
                     dev_log(f"[daily] {self.name}: water 候选经二次复查不成立，回到行状态机重新分类")
                     ctx.sleep(0.25)
                     continue
