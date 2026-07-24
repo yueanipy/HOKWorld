@@ -35,10 +35,17 @@ class CookingTask(AlchemyTask):
         telescope_turn_stages_px=(-400, -200, -150, -150),
         telescope_move_after_first_stage=True,
         telescope_turn_timeout_s=1.6,
+        telescope_failure_timeout_s=3.0,
         telescope_post_turn_walk_s=0.0,
         telescope_recovery_side="",
         telescope_recovery_step_s=0.08,
         telescope_recovery_scan_px=(120, -240, 120),
+        
+        climb_overshoot_recovery=True,
+        climb_recovery_back_steps=5,
+        climb_recovery_side="a",
+        climb_recovery_side_steps=4,
+        climb_recovery_step_s=0.09,
         interact_on_arrival=True,
         select_lower_prompt_on_stack=True,
     )
