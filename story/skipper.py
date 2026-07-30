@@ -548,6 +548,8 @@ class StorySkipper:
 
     
     def _open_debug(self):
+        if getattr(sys, "frozen", False):
+            return None
         try:
             d = HERE.parent / "sessions"
             d.mkdir(parents=True, exist_ok=True)
