@@ -221,6 +221,8 @@ class FishingBot:
 
     
     def _save_debug(self, frame, tag, scores=None) -> None:
+        if getattr(sys, "frozen", False):
+            return
         d = sessions_dir() / "_debug"
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{tag}_{time.strftime('%H%M%S')}.png"
