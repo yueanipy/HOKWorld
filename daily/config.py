@@ -9,6 +9,7 @@ from pathlib import Path
 TASK_REGISTRY: dict[str, str] = {
     "farm": "农贸作物",
     "incubator": "培养箱",
+    "ranch": "牧场",
     "dispatch": "宠物派遣",
     "pet_feeding": "宠物喂食",
     "photo": "拍照",
@@ -21,16 +22,17 @@ TASK_REGISTRY: dict[str, str] = {
 }
 
 DEFAULT_ORDER = [
-    "farm",
-    "incubator",
-    "dispatch",
-    "pet_feeding",
     "photo",
     "interest_like",
+    "dispatch",
+    "incubator",
+    "pet_feeding",
+    "ranch",
+    "farm",
     "friends",
     "daily_fishing",
-    "cooking",
     "alchemy",
+    "cooking",
     "playbook_claim",
 ]
 DEFAULT_ENABLED: set[str] = set()
@@ -43,6 +45,10 @@ DISPATCH_REGIONS: tuple[str, ...] = (
 DEFAULT_DISPATCH_REGIONS: tuple[str, str, str] = (
     "东云落高地", "春溪原", "彩云盆地",
 )
+RANCH_OPEN_REGIONS: tuple[str, ...] = (
+    "区域一", "区域二", "区域三", "区域四",
+)
+APPEND_ON_MIGRATION: tuple[str, ...] = ("ranch",)
 
 
 def _config_path() -> Path:
@@ -68,7 +74,11 @@ class DailyConfig:
                 d = json.loads(self._path.read_text(encoding="utf-8"))
                 
                 order = [t for t in d.get("order", []) if t in TASK_REGISTRY]
-                order += [t for t in DEFAULT_ORDER if t not in order]
+                order += [
+                    t for t in DEFAULT_ORDER
+                    if t not in order and t not in APPEND_ON_MIGRATION
+                ]
+                order += [t for t in APPEND_ON_MIGRATION if t not in order]
                 self._d["order"] = order
                 enabled = [t for t in d.get("enabled", DEFAULT_ENABLED) if t in TASK_REGISTRY]
                 self._d["enabled"] = enabled
@@ -147,6 +157,27 @@ class DailyConfig:
                 or any(name not in DISPATCH_REGIONS for name in selected)):
             raise ValueError("宠物派遣地区必须是三个不同的有效地区")
         self.set_param("dispatch", "regions", selected)
+
+    def ranch_open_region(self) -> int:
+        '返回牧场已经开放的最高区域编号。'
+        raw = self.param("ranch", "open_region", 1)
+        if isinstance(raw, str) and raw in RANCH_OPEN_REGIONS:
+            return RANCH_OPEN_REGIONS.index(raw) + 1
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 1
+        return max(1, min(4, value))
+
+    def set_ranch_open_region(self, region) -> None:
+        '保存牧场已经开放的最高区域编号。'
+        if isinstance(region, str) and region in RANCH_OPEN_REGIONS:
+            value = RANCH_OPEN_REGIONS.index(region) + 1
+        else:
+            value = int(region)
+        if not 1 <= value <= 4:
+            raise ValueError("牧场开放区域必须在区域一至区域四之间")
+        self.set_param("ranch", "open_region", value)
 
     def run_list(self) -> list[str]:
         '最终要跑的任务(按 order,滤掉未启用)。'
