@@ -13,6 +13,7 @@ from runtime_guard import (dev_log, input_allowed, release_known_keys, safe_clic
 
 VK = {
     "esc": 0x1B, "f": 0x46, "g": 0x47, "e": 0x45, "q": 0x51, "m": 0x4D,
+    "t": 0x54,
     "w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44, "c": 0x43,
     "f7": 0x76,
     "f11": 0x7A,  
@@ -347,9 +348,9 @@ class DailyContext:
         self.log(f"走位:按住 {key.upper()} {seconds:.1f}s")
         return self.press(key, hold_s=max(0.0, seconds))
 
-    def tap(self, key: str, seconds: float = 0.18) -> None:
+    def tap(self, key: str, seconds: float = 0.18) -> bool:
         '轻点方向键一小步(带视觉确认的步进走位用;比盲走一大段可控)。'
-        self.press(key, hold_s=max(0.05, seconds))
+        return self.press(key, hold_s=max(0.05, seconds))
 
     def center_camera(self) -> bool:
         '镜头回正:屏幕中央点一次中键(同类脚本 centercamera 同款。'
