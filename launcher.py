@@ -472,6 +472,7 @@ class GameLauncher:
         self._hwnd = 0
         self._restored_hwnds = set()
         self._input_tick_at_start = input_tick_at_start
+        self.enter_game_clicked_at: float | None = None
         self._foreground_handoff_attempted = False
         self._foreground_handoff_done = False
         self._foreground_wait_logged = False
@@ -926,6 +927,7 @@ class GameLauncher:
                             self.log(f"检测到「开始游戏」→ 点击进入游戏(第 {attempt} 次)")
                             if self._click_game_ui(sp):
                                 self._start_clicked = attempt
+                                self.enter_game_clicked_at = time.time()
                                 self._launch_cd = time.time() + 2.0   
                                 time.sleep(self.AFTER_CLICK_S)
                         elif last != "start_confirm":
