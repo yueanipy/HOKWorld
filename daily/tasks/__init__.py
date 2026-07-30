@@ -10,6 +10,7 @@ def build_task(task_id: str, ctx):
     from daily.tasks.playbook_claim import PlaybookClaimTask
     from daily.tasks.farm import FarmTask
     from daily.tasks.incubator import IncubatorTask
+    from daily.tasks.ranch import RanchTask
     from daily.tasks.friends import FriendsTask
     from daily.tasks.pet_feeding import PetFeedingTask
     from daily.tasks.daily_fishing import DailyFishingTask
@@ -19,6 +20,7 @@ def build_task(task_id: str, ctx):
     factory = {
         "farm": FarmTask,
         "incubator": IncubatorTask,
+        "ranch": RanchTask,
         "dispatch": DispatchTask,
         "photo": PhotoTask,
         "interest_like": InterestLikeTask,
