@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 import cv2
@@ -10,7 +9,8 @@ import numpy as np
 
 import daily.recognizer as rec
 from daily.base import DailyTask, TaskResult
-from world_map import teleport_to
+from daily.tasks.daily_fishing_navigation import FishingShoreNavigator
+from world_map import WorldMapAtlas, teleport_to
 from fishing.fisher import FishingBot
 from fishing.matcher import FishingRecognizer
 from runtime_guard import dev_log
@@ -30,18 +30,11 @@ class DailyFishingTask(DailyTask):
         "green": Path(__file__).resolve().parents[1] / "templates" / "quickbar_green_rod.png",
     }
     _quickbar_rod_templates = None
-    SHORE_STRAFE_S = 0.8
-    SHORE_TURN_PX = 300      
-    SHORE_MIN_WALK_S = 5.0   
-    SHORE_MAX_WALK_S = 10.0  
-    SHORE_MID_RATIO = 0.60
-    SHORE_LOW_RATIO = 0.30
-    SHORE_CENTER_RATIO = 0.62
-    SHORE_FRONT_RATIO = 0.35
     HUD_KEYWORDS = ("抓拍", "好友", "切换", "输入", "高处")
     FISHING_ACTIVE_STATES = frozenset(("FISHING_READY", "WAITING_FOR_BITE", "HOOK_PROMPT"))
 
-    def _navigate_to_yungen_pier(self) -> bool:
+    def _navigate_to_yungen_pier(
+            self, atlas: WorldMapAtlas | None = None) -> bool:
         '调用公共全地图传送到云根镇云舟栈，不保留任务私有地图逻辑。'
         stable = 0
 
@@ -55,6 +48,7 @@ class DailyFishingTask(DailyTask):
         ok = teleport_to(
             self.ctx, "云根镇云舟栈", timeout=45.0,
             arrival_predicate=arrived,
+            atlas=atlas,
         )
         if ok:
             self.ctx.sleep(1.0)
@@ -97,69 +91,6 @@ class DailyFishingTask(DailyTask):
                 ratio((0.15, 0.42, 0.85, 0.68)),
                 ratio((0.30, 0.25, 0.70, 0.62)),
                 front)
-
-    def _walk_to_shore(self) -> bool:
-        ctx = self.ctx
-        if not ctx.walk("d", self.SHORE_STRAFE_S):
-            return False
-        ctx.sleep(0.20)
-        ctx.log(f"{self.name}:D {self.SHORE_STRAFE_S:.1f}秒完成，"
-                f"开始按住 W 并同步右转{self.SHORE_TURN_PX}px")
-        start = ctx.logical_time()
-        streak = 0
-        camera_turned = False
-        while ctx.logical_time() - start < self.SHORE_MAX_WALK_S and not ctx.should_stop():
-            if ctx.paused:
-                time.sleep(0.08)
-                continue
-            if not ctx.foreground():
-                ctx.log(f"{self.name}:寻岸时游戏失去前台，已立即抬起 W 并停止路线")
-                return False
-            with ctx.hold("w") as held:
-                if not held:
-                    return False
-                if not camera_turned:
-                    
-                    if not ctx.drag_camera(self.SHORE_TURN_PX, steps=20):
-                        ctx.log(f"{self.name}:W 行进中的右转视角失败，已抬起 W")
-                        return False
-                    camera_turned = True
-                while (ctx.logical_time() - start < self.SHORE_MAX_WALK_S
-                       and not ctx.should_stop()):
-                    if not ctx.action_ready():
-                        break  
-                    frame = ctx.grab_nowait()
-                    if frame is None:
-                        time.sleep(0.03)
-                        continue
-                    mid, low, center, front = self._water_ratios(frame)
-                    elapsed = ctx.logical_time() - start
-                    
-                    
-                    at_edge = (elapsed >= self.SHORE_MIN_WALK_S
-                               and mid >= self.SHORE_MID_RATIO
-                               and low >= self.SHORE_LOW_RATIO
-                               and center >= self.SHORE_CENTER_RATIO
-                               and front >= self.SHORE_FRONT_RATIO)
-                    streak = streak + 1 if at_edge else 0
-                    dev_log(f"[daily fishing] 寻岸 water_mid={mid:.3f} water_low={low:.3f} "
-                            f"water_center={center:.3f} water_front={front:.3f} "
-                            f"elapsed={elapsed:.1f}/{self.SHORE_MIN_WALK_S:.0f}s streak={streak}")
-                    if streak >= 2:
-                        break
-                    time.sleep(0.10)
-            if streak >= 2:
-                break
-            if not ctx.paused and not ctx.action_ready():
-                ctx.log(f"{self.name}:寻岸输入权限失效，已停止路线")
-                return False
-        if streak < 2:
-            ctx.log(f"{self.name}:前进 {self.SHORE_MAX_WALK_S:.0f} 秒仍未确认到达水陆交界")
-            return False
-        ctx.log(f"{self.name}:已到达水陆交界")
-        
-        ctx.sleep(0.85)
-        return True
 
     @staticmethod
     def _fishing_ready(frame, recognizer: FishingRecognizer) -> bool:
@@ -401,6 +332,7 @@ class DailyFishingTask(DailyTask):
 
     def _run_three_fish(self) -> str:
         ctx = self.ctx
+        self._last_fishing_caught = 0
         bot = FishingBot(log=ctx.log, debug=False)
         finished = threading.Event()
 
@@ -414,7 +346,8 @@ class DailyFishingTask(DailyTask):
                     paused = ctx.paused
                     bot.set_paused(paused)
 
-        monitor = threading.Thread(target=bridge, name="DailyFishingBridge", daemon=True)
+        monitor = threading.Thread(
+            target=bridge, name="DailyFishingBridge", daemon=True)
         monitor.start()
         try:
             bot.run(count=3, exit_after=False)
@@ -423,20 +356,58 @@ class DailyFishingTask(DailyTask):
             monitor.join(timeout=1.0)
         dev_log(f"[daily fishing] FishingBot结束 caught={bot.caught}/3 "
                 f"stop_requested={ctx.should_stop()}")
+        self._last_fishing_caught = max(0, int(bot.caught))
         if ctx.should_stop():
             return TaskResult.ABORT
         if bot.caught >= 3:
             self._close_final_settlements(getattr(bot, "rec", None))
             if not self._exit_fishing_mode(getattr(bot, "rec", None)):
                 ctx.log(f"{self.name}:完成钓鱼但未确认退出钓鱼界面")
-                dev_log(f"[daily fishing] 三条已完成但退出钓鱼模式确认失败 caught={bot.caught}/3")
+                dev_log(
+                    "[daily fishing] 三条已完成但退出钓鱼模式确认失败 "
+                    f"caught={bot.caught}/3")
                 return TaskResult.FAIL
             ctx.log(f"{self.name}:已完成 3/3")
-            dev_log(f"[daily fishing] 每日钓鱼成功 caught={bot.caught}/3 exit_confirmed=True")
+            dev_log(
+                f"[daily fishing] 每日钓鱼成功 caught={bot.caught}/3 "
+                "exit_confirmed=True")
             return TaskResult.SUCCESS
         ctx.log(f"{self.name}:钓鱼提前结束，仅完成 {bot.caught}/3")
         dev_log(f"[daily fishing] 钓鱼提前结束 caught={bot.caught}/3")
         return TaskResult.FAIL
+
+    def _prepare_fishing_once(
+            self, recognizer: FishingRecognizer,
+            atlas: WorldMapAtlas) -> bool:
+        '完成一次传送、图谱寻岸、鱼竿准备和钓鱼状态确认。'
+        ctx = self.ctx
+        if not self._navigate_to_yungen_pier(atlas):
+            return False
+        shore_navigator = FishingShoreNavigator(ctx, atlas=atlas)
+        if not shore_navigator.run():
+            return False
+        rod_state = self._equip_rod_if_needed(recognizer)
+        if not rod_state:
+            return False
+        
+        if rod_state == "waiting":
+            return True
+        if rod_state in ("ready", "equipped"):
+            if not ctx.drag_camera(0, steps=8, dy_px=-60):
+                return False
+            ctx.sleep(0.35)
+        if rod_state == "ready":
+            return True
+        if rod_state == "equipped":
+            active_state = self._activate_equipped_rod(
+                recognizer, verified_equipped=True)
+            if not active_state:
+                ctx.log(
+                    f"{self.name}:装备候选后未进入钓鱼状态，"
+                    "按水岸位置失败处理")
+                return False
+            return True
+        return False
 
     def _close_final_settlements(self, recognizer) -> None:
         '清理第三条鱼的结算层；个人记录按 F，普通渔获提示等待自然消失。'
@@ -541,18 +512,24 @@ class DailyFishingTask(DailyTask):
         if not recognizer.ready:
             ctx.log(f"{self.name}:钓鱼识别模板未就绪")
             return TaskResult.FAIL
-        if not self._navigate_to_yungen_pier() or not self._walk_to_shore():
-            return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-        rod_state = self._equip_rod_if_needed(recognizer)
-        if not rod_state:
-            return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-        if rod_state != "waiting":
-            if not ctx.drag_camera(0, steps=8, dy_px=-55):
-                return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-            ctx.sleep(0.35)
-        if rod_state == "equipped":
-            active_state = self._activate_equipped_rod(recognizer, verified_equipped=True)
-            if not active_state:
-                ctx.log(f"{self.name}:装备候选后未进入钓鱼状态，停止以避免误用道具")
-                return TaskResult.FAIL
-        return self._run_three_fish()
+        atlas = WorldMapAtlas()
+        for attempt in range(1, 3):
+            prepared = self._prepare_fishing_once(recognizer, atlas)
+            if ctx.should_stop():
+                return TaskResult.ABORT
+            if prepared:
+                result = self._run_three_fish()
+                if result != TaskResult.FAIL:
+                    return result
+                
+                if getattr(self, "_last_fishing_caught", 0) > 0:
+                    return result
+            if attempt == 1:
+                reason = (
+                    "首次抛竿失败"
+                    if prepared else "首次未完成水岸与钓鱼状态确认")
+                ctx.log(
+                    f"{self.name}:{reason}，重新传送并完整重试一次")
+                continue
+            ctx.log(f"{self.name}:第二次仍无法在水岸开始钓鱼")
+        return TaskResult.FAIL
