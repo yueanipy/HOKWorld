@@ -93,7 +93,7 @@ def enter_manage_map(ctx, timeout: float = 12.0) -> bool:
     return bool(ctx.wait_until(rec.in_manage_map, timeout=timeout, desc="进入管理地图"))
 
 
-def teleport_via_node(ctx, node_pt, timeout: float = 15.0) -> bool:
+def teleport_via_node(ctx, node_pt, timeout: float = 30.0) -> bool:
     '在管理地图传送到设施，并等待角色 HUD 连续稳定出现。'
     ctx.click(node_pt)
     dlg = ctx.wait_until(lambda f: rec.teleport_dialog(f)[0], timeout=6.0, desc="传送确认弹窗")
