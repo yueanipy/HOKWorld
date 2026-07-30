@@ -13,6 +13,7 @@ class FieldTask(DailyTask):
     '子类需设:NODEPT(管理地图节点)、taskid/name,并按需覆盖 DO 与参数。'
 
     NODE_PT = None                 
+    TELEPORT_TIMEOUT_S = 30.0      
     MAX_ROWS = 30                  
                                    
     SEED_NAME = ""                 
@@ -315,15 +316,21 @@ class FieldTask(DailyTask):
         ctx = self.ctx
         if not nav.enter_manage_map(ctx):
             return False
-        if not nav.teleport_via_node(ctx, self.NODE_PT):
+        if not nav.teleport_via_node(
+                ctx, self.NODE_PT, timeout=self.TELEPORT_TIMEOUT_S):
             return False
         
         
-        loaded = ctx.wait_until(rec.homeland_loaded, timeout=15.0, interval=0.5,
+        loaded = ctx.wait_until(
+                                rec.homeland_loaded,
+                                timeout=self.TELEPORT_TIMEOUT_S,
+                                interval=0.5,
                                 desc="传送完成(左上「居所」标题)")
         if not loaded:
             from runtime_guard import dev_log
-            dev_log(f"[daily] {self.name}: 传送 15s 未见「居所」标题 → 到位失败")
+            dev_log(
+                f"[daily] {self.name}: 传送 {self.TELEPORT_TIMEOUT_S:g}s"
+                " 未见「居所」标题 → 到位失败")
             return False                     
         ctx.sleep(0.8)                       
         self._ensure_row_mode()              
@@ -332,6 +339,21 @@ class FieldTask(DailyTask):
         if not self._approach_field():       
             return False
         return True                          
+
+    def _goto_field_with_retry(self) -> bool:
+        '田地首次到位失败时，重新传送并完整执行一次到位流程。'
+        if self._goto_field():
+            return True
+        ctx = self.ctx
+        if ctx.should_stop():
+            return False
+        from runtime_guard import dev_log
+        ctx.log(f"{self.name}:到位失败 → 重新传送自愈重试一次")
+        dev_log(f"[daily] {self.name}: 到位失败 → 重新传送自愈重试")
+        if self._goto_field():
+            return True
+        ctx.log(f"{self.name}:重试后仍到位失败 → 放弃本任务")
+        return False
 
     
     def _ring_active(self, samples: int = 6, interval: float = 0.15) -> bool:
@@ -940,15 +962,8 @@ class FieldTask(DailyTask):
         from runtime_guard import dev_log
 
         ctx = self.ctx
-        if not self._goto_field():
-            
-            if ctx.should_stop():
-                return TaskResult.ABORT
-            ctx.log(f"{self.name}:到位失败 → 重新传送自愈重试一次")
-            dev_log(f"[daily] {self.name}: 到位失败 → 重新传送自愈重试")
-            if not self._goto_field():
-                ctx.log(f"{self.name}:重试后仍到位失败 → 放弃本任务")
-                return TaskResult.FAIL
+        if not self._goto_field_with_retry():
+            return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
         self._left_to_col1()                         
         can_plant = self.DO_PLANT
         self._adv_w_count = 0                         
