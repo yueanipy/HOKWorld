@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import datetime
 
 import win32con
 import win32gui
@@ -15,6 +16,7 @@ from daily.context import DailyContext
 from daily.tasks.farm import FarmTask
 from daily.tasks.incubator import IncubatorTask
 from daily.tasks.monthly_card import handle_monthly_card_once
+from daily.tasks.ranch import RanchTask
 from launcher import GameLauncher
 from winenv import (activate_game_window, allow_foreground_activation,
                       can_auto_activate_game, find_game_hwnd, last_input_tick)
@@ -23,6 +25,7 @@ from runtime_guard import dev_log, release_known_keys
 
 ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
 
 
 def _set_thread_execution_state(flags: int) -> int:
@@ -33,16 +36,19 @@ def _set_thread_execution_state(flags: int) -> int:
 
 @contextmanager
 def prevent_automatic_sleep(set_execution_state=None, log=print):
-    '实际启动和田地操作期间阻止系统自动休眠，结束后恢复默认。'
+    '阻止自动休眠、息屏及由显示超时触发的锁屏。'
     setter = set_execution_state or _set_thread_execution_state
     enabled = False
     try:
-        enabled = bool(setter(ES_CONTINUOUS | ES_SYSTEM_REQUIRED))
+        enabled = bool(setter(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED))
         if not enabled:
-            log("未能设置系统防休眠，本轮继续运行")
+            log("未能设置系统防休眠和息屏，本轮继续运行")
+        else:
+            log("自动浇水运行期间已阻止自动休眠、息屏及显示超时锁屏")
     except Exception as exc:
-        dev_log("自动浇水:设置系统防休眠失败", exc)
-        log(f"设置系统防休眠失败:{type(exc).__name__}: {exc}")
+        dev_log("自动浇水:设置系统防休眠和息屏失败", exc)
+        log(f"设置系统防休眠和息屏失败:{type(exc).__name__}: {exc}")
     try:
         yield
     finally:
@@ -89,8 +95,10 @@ class AutoWaterScheduler:
         ("农贸作物", FarmTask),
         ("培养箱", IncubatorTask),
     )
+    RANCH_TASK = ("牧场", RanchTask)
 
     def __init__(self, interval_minutes: int = 90, close_game_after: bool = False,
+                 include_ranch: bool = False,
                  shutdown_hours: int = 0,
                  log=print, on_state=lambda _state: None,
                  input_tick_at_start: int | None = None,
@@ -106,6 +114,7 @@ class AutoWaterScheduler:
                  set_execution_state: Callable[[int], int] | None = None) -> None:
         self.interval_minutes = max(1, int(interval_minutes))
         self.close_game_after = bool(close_game_after)
+        self.include_ranch = bool(include_ranch)
         self.shutdown_hours = max(0, int(shutdown_hours))
         self.log = log
         self.on_state = on_state
@@ -113,7 +122,12 @@ class AutoWaterScheduler:
         self._launcher_factory = launcher_factory or (
             lambda tick: GameLauncher(log=self.log, input_tick_at_start=tick))
         self._context_factory = context_factory or (lambda: DailyContext(log=self.log))
-        self._task_factories = task_factories or self.TASKS
+        if task_factories is not None:
+            self._task_factories = task_factories
+        elif self.include_ranch:
+            self._task_factories = (*self.TASKS, self.RANCH_TASK)
+        else:
+            self._task_factories = self.TASKS
         self._find_game = find_game or (
             lambda exclude=0: find_game_hwnd(
                 prefer_foreground=False, exclude_hwnd=int(exclude or 0)))
@@ -135,6 +149,7 @@ class AutoWaterScheduler:
         self._shutdown_deadline: float | None = None
         self.auto_close_requested = False
         self._last_cycle_stop_reason = ""
+        self._cycle_enter_game_at: datetime | None = None
 
     def stop(self) -> None:
         '唤醒等待并协作式停止当前启动器或田地任务。'
@@ -157,6 +172,12 @@ class AutoWaterScheduler:
         except Exception as exc:
             dev_log("自动浇水:状态回调失败", exc)
 
+    def _audit(self, message: str) -> None:
+        '关键周期状态同时写入界面和持久开发日志。'
+        text = str(message)
+        self.log(text)
+        dev_log(f"[auto_water] {text}")
+
     def _next_input_tick(self) -> int | None:
         tick = self._first_input_tick
         self._first_input_tick = None
@@ -174,10 +195,11 @@ class AutoWaterScheduler:
 
     def _ensure_game_ready(self) -> bool:
         '由公共启动状态机确认游戏，并且本轮最多主动交接一次正式游戏前台。'
+        self._cycle_enter_game_at = datetime.now()
         tick = self._next_input_tick()
         allow_foreground_activation()
         self._state("检查并启动游戏中…")
-        self.log("开始确认游戏状态；未启动时将自动启动")
+        self._audit("开始确认游戏状态；未启动时将自动启动")
         launcher = self._launcher_factory(tick)
         with self._active_lock:
             self._launcher = launcher
@@ -190,26 +212,36 @@ class AutoWaterScheduler:
             with self._active_lock:
                 self._launcher = None
         if self._stopped() or not ok:
-            self.log("本轮自动启动游戏未完成")
+            self._audit(
+                f"本轮自动启动游戏未完成 stopped={self._stopped()} "
+                f"launcher_success={ok}")
             return False
+        clicked_at = getattr(launcher, "enter_game_clicked_at", None)
+        if clicked_at:
+            self._cycle_enter_game_at = datetime.fromtimestamp(float(clicked_at))
 
         launcher_hwnd = int(getattr(launcher, "_launcher_hwnd", 0) or 0)
         hwnd = self._wait_for_game_window(launcher_hwnd)
         if not hwnd:
-            self.log("启动器已完成，但未找到正式游戏窗口")
+            self._audit(
+                f"启动器已完成，但未找到正式游戏窗口 "
+                f"launcher_hwnd={launcher_hwnd}")
             return False
         self._cycle_hwnd = hwnd
+        self._audit(
+            f"正式游戏窗口已确认 hwnd={hwnd} "
+            f"launcher_handoff={bool(getattr(launcher, '_foreground_handoff_attempted', False))}")
         if not bool(getattr(launcher, "_foreground_handoff_attempted", False)):
             if self._can_activate_game(tick):
-                self.log("游戏状态已确认，执行本轮唯一一次前台交接")
+                self._audit("游戏状态已确认，执行本轮唯一一次前台交接")
                 if not self._activate_game(hwnd):
-                    self.log("本轮唯一一次游戏前台交接失败，等待游戏自然回到前台")
+                    self._audit("本轮唯一一次游戏前台交接失败，等待游戏自然回到前台")
             else:
-                self.log("检测到用户在启动期间操作其它程序，本轮不抢前台")
+                self._audit("检测到用户在启动期间操作其它程序，本轮不抢前台")
         return True
 
     def run_cycle(self, stop_deadline: float | None = None) -> dict[str, str]:
-        '在防自动休眠保护下执行一轮启动与田地任务。'
+        '独立执行一轮时，在该轮范围内保持系统唤醒。'
         with prevent_automatic_sleep(self._set_execution_state, self.log):
             return self._run_cycle_active(stop_deadline)
 
@@ -220,6 +252,7 @@ class AutoWaterScheduler:
         self._cycle_hwnd = 0
         if self._stopped() or not self._ensure_game_ready():
             results["launch"] = TaskResult.ABORT if self._stopped() else TaskResult.FAIL
+            self._audit(f"本轮在启动阶段结束 results={results}")
             return results
 
         ctx = self._context_factory()
@@ -232,13 +265,18 @@ class AutoWaterScheduler:
             started = bool(ctx.start())
             if not started:
                 results["context"] = TaskResult.FAIL
+                self._audit("每日任务上下文初始化失败")
                 return results
             
             if not ctx.wait_foreground(timeout=None):
                 results["foreground"] = (
                     TaskResult.ABORT if self._stopped() else TaskResult.FAIL)
+                self._audit(
+                    f"等待游戏前台结束 stop_reason="
+                    f"{getattr(ctx, 'stop_reason', '')!r} results={results}")
                 return results
             self._cycle_hwnd = int(ctx.hwnd or self._cycle_hwnd)
+            self._audit(f"田地任务上下文就绪 hwnd={self._cycle_hwnd}")
             try:
                 monthly_state = str(self._monthly_handler(ctx, self.log) or "")
                 if monthly_state == "clicked":
@@ -250,9 +288,12 @@ class AutoWaterScheduler:
             for name, factory in self._task_factories:
                 if self._stopped() or ctx.should_stop():
                     results[name] = TaskResult.ABORT
+                    self._audit(
+                        f"[{name}] 启动前停止 reason={getattr(ctx, 'stop_reason', '')!r}")
                     break
                 self._state(f"执行中 · {name}")
                 self._back_to_world(ctx)
+                self._audit(f"[{name}] 开始")
                 try:
                     task = factory(ctx)
                     result = task.run() or TaskResult.SUCCESS
@@ -261,7 +302,7 @@ class AutoWaterScheduler:
                     self.log(f"[{name}] 出错，继续下一处:{type(exc).__name__}: {exc}")
                     result = TaskResult.FAIL
                 results[name] = result
-                self.log(f"[{name}] 结束:{result}")
+                self._audit(f"[{name}] 结束:{result}")
                 if result == TaskResult.ABORT:
                     break
             if not self._stopped():
@@ -286,70 +327,92 @@ class AutoWaterScheduler:
         if self._stopped():
             return
         self._state("自动关闭中…")
-        self.log("已到自动关闭时间，正在停止任务并关闭游戏和软件")
+        self._audit("已到自动关闭时间，正在停止任务并关闭游戏和软件")
         hwnd = int(self._find_game(0) or self._cycle_hwnd or 0)
         if hwnd:
-            self._close_game(hwnd)
+            closed = bool(self._close_game(hwnd))
+            self._audit(f"自动关闭游戏结果 closed={closed} hwnd={hwnd}")
         if self._stopped():
             return
         self.auto_close_requested = True
 
     def run(self) -> None:
-        '立即跑首轮，后续周期始终从每轮实际启动时间计算。'
-        self.log(
+        '持续保持系统唤醒，立即跑首轮并按固定周期继续。'
+        self._audit(
             f"自动浇水开始:间隔 {self.interval_minutes} 分钟，"
+            f"任务={'、'.join(name for name, _factory in self._task_factories)}，"
             f"完成后{'关闭' if self.close_game_after else '保留'}游戏，"
             f"自动关闭={'关闭' if self.shutdown_hours == 0 else f'{self.shutdown_hours} 小时'}")
         if self.shutdown_hours > 0:
             self._shutdown_deadline = time.monotonic() + self._shutdown_seconds
         try:
-            while not self._stopped():
-                cycle_started = time.monotonic()
-                cycle_deadline = cycle_started + self._interval_seconds
-                stop_deadline = min(
-                    deadline for deadline in (cycle_deadline, self._shutdown_deadline)
-                    if deadline is not None
-                )
-                self._cycle_index += 1
-                self._state(f"第 {self._cycle_index} 轮准备中…")
-                self.log(f"自动浇水:第 {self._cycle_index} 轮开始")
-                results = self.run_cycle(stop_deadline=stop_deadline)
-                if self._stopped():
-                    break
-                self.log(f"自动浇水:第 {self._cycle_index} 轮结束，明细:{results}")
-                if self._last_cycle_stop_reason == "game_closed":
-                    self.log("检测到用户关闭游戏，本轮计为结束；不会立即重启或补做")
-                elif self._last_cycle_stop_reason == "deadline":
-                    self.log("本轮到达固定周期截止点，放弃未完成步骤并刷新到下一轮")
-                if self._shutdown_due():
-                    self._perform_auto_close()
-                    break
-                task_results = [results.get(name) for name, _factory in self._task_factories]
-                cycle_completed = bool(task_results) and all(
-                    result in (TaskResult.SUCCESS, TaskResult.SKIP)
-                    for result in task_results)
-                if self.close_game_after and self._cycle_hwnd and cycle_completed:
-                    self._state("正在关闭游戏…")
-                    self._close_game(self._cycle_hwnd)
-                    if self._stopped():
-                        break
-                elif self.close_game_after and self._cycle_hwnd:
-                    self.log("本轮浇水未全部完成，保留游戏窗口以便下轮重试")
-                remaining = max(0.0, cycle_deadline - time.monotonic())
-                if remaining > 0.0:
-                    self._state(f"等待中 · 本轮启动后 {self.interval_minutes} 分钟继续")
-                    self.log(f"下一轮仍按本轮启动时间计时，剩余 {remaining / 60.0:.1f} 分钟")
-                if self._shutdown_deadline is not None:
-                    remaining = min(
-                        remaining,
-                        max(0.0, self._shutdown_deadline - time.monotonic()),
-                    )
-                if remaining > 0.0 and self._stop_event.wait(remaining):
-                    break
-                if self._shutdown_due():
-                    self._perform_auto_close()
-                    break
+            with prevent_automatic_sleep(self._set_execution_state, self.log):
+                self._run_schedule_loop()
         finally:
             self.stop()
             self._state("已停止")
-            self.log("自动浇水已停止")
+            self._audit("自动浇水已停止")
+
+    def _run_schedule_loop(self) -> None:
+        '在已经取得防休眠保护后执行固定周期循环。'
+        while not self._stopped():
+            cycle_started = time.monotonic()
+            cycle_deadline = cycle_started + self._interval_seconds
+            stop_deadline = min(
+                deadline for deadline in (cycle_deadline, self._shutdown_deadline)
+                if deadline is not None
+            )
+            self._cycle_index += 1
+            self._state(f"第 {self._cycle_index} 轮准备中…")
+            self._audit(f"第 {self._cycle_index} 轮开始")
+            
+            
+            results = self._run_cycle_active(stop_deadline=stop_deadline)
+            if self._stopped():
+                break
+            self._audit(f"第 {self._cycle_index} 轮结束，明细:{results}")
+            if self._last_cycle_stop_reason == "game_closed":
+                self._audit("检测到用户关闭游戏，本轮计为结束；不会立即重启或补做")
+            elif self._last_cycle_stop_reason == "deadline":
+                self._audit("本轮到达固定周期截止点，放弃未完成步骤并刷新到下一轮")
+            if self._shutdown_due():
+                self._perform_auto_close()
+                break
+            if (
+                self.close_game_after
+                and self._cycle_hwnd
+                and self._last_cycle_stop_reason != "game_closed"
+            ):
+                self._state("正在关闭游戏…")
+                closed = bool(self._close_game(self._cycle_hwnd))
+                self._audit(
+                    f"本轮田地操作已结束，关闭游戏结果 closed={closed} "
+                    f"hwnd={self._cycle_hwnd} results={results}")
+                if self._stopped():
+                    break
+            elif (
+                self.close_game_after
+                and self._cycle_hwnd
+                and self._last_cycle_stop_reason == "game_closed"
+            ):
+                self._audit("游戏已由用户关闭，无需重复关闭；调度器继续等待下一轮")
+            remaining = max(0.0, cycle_deadline - time.monotonic())
+            if remaining > 0.0:
+                entered_at = self._cycle_enter_game_at or datetime.now()
+                entered_text = entered_at.strftime("%H:%M")
+                remaining_minutes = max(1, int((remaining + 59.0) // 60.0))
+                self._state(
+                    f"等待中 · 上次浇水 {entered_text} · "
+                    f"剩余约 {remaining_minutes} 分钟")
+                self._audit(
+                    f"下一轮仍按本轮启动时间计时，剩余 {remaining / 60.0:.1f} 分钟")
+            if self._shutdown_deadline is not None:
+                remaining = min(
+                    remaining,
+                    max(0.0, self._shutdown_deadline - time.monotonic()),
+                )
+            if remaining > 0.0 and self._stop_event.wait(remaining):
+                break
+            if self._shutdown_due():
+                self._perform_auto_close()
+                break
