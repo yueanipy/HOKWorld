@@ -14,7 +14,10 @@ DEFAULTS = {
     "close_script_when_game_exits": False,  
     "auto_water_interval_minutes": 90, 
     "auto_water_close_game": False,    
+    "auto_water_include_ranch": False, 
     "auto_water_shutdown_hours": 0,    
+    "combat_ultimate_mode": "immediate", 
+    "combat_profile_file": "",         
 }
 
 
