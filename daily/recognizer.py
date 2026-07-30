@@ -1448,12 +1448,109 @@ def find_claimable_activity_reward(frame: np.ndarray, min_score: float = 0.18):
     return None
 
 
-def find_interest_task_card(frame: np.ndarray):
-    '只 OCR 会友页的兴趣圈卡片;命中任务描述才返回卡片点击点。'
-    text = ocr_text(frame, R.ROI_INTEREST_TASK_CARD)
-    if "兴趣圈" in text and ("浏览" in text or "点赞" in text):
-        return R.PT_INTEREST_TASK_CARD
+def _interest_phrase_point(text: str, box) -> tuple[float, float] | None:
+    '确认兴趣圈短语后返回独立文字框中心。'
+    compact = _interest_text(text)
+    x0, y0, x1, y1 = box
+    for phrase in ("浏览1次兴趣圈", "浏览一次兴趣圈"):
+        if phrase in compact:
+            return (x0 + x1) * 0.5, (y0 + y1) * 0.5
     return None
+
+
+def _interest_text(text: str) -> str:
+    compact = "".join(text.split()).replace("【", "[").replace("】", "]")
+    
+    if compact.startswith("["):
+        end = compact.find("]")
+        if end > 1:
+            progress = compact[1:end]
+            if "/" in progress and all(part.isdigit() for part in progress.split("/", 1)):
+                compact = compact[end + 1:]
+    return compact.replace("一次", "1次")
+
+
+def _isolated_interest_entry(boxes) -> dict | None:
+    '从 OCR 框中返回不含拍照任务的兴趣圈短语。'
+    for text, x0, y0, x1, y1 in boxes:
+        normalized = _interest_text(text)
+        if "浏览1次兴趣圈" not in normalized or "拍照" in normalized:
+            continue
+        pt = _interest_phrase_point(text, (x0, y0, x1, y1))
+        if pt is not None:
+            return {"pt": pt, "text": text, "normalized": normalized, "mode": "phrase"}
+    return None
+
+
+def _refine_merged_interest_box(frame: np.ndarray, merged_box) -> dict | None:
+    '把跨卡 OCR 框动态分块，重新获得独立兴趣圈文字框。'
+    _text, x0, y0, x1, y1 = merged_box
+    width = x1 - x0
+    if width <= 0.08:
+        return None
+    for parts in (2, 3, 4):
+        part_width = width / parts
+        overlap = min(0.025, part_width * 0.18)
+        for index in range(parts):
+            left = max(0.0, x0 + index * part_width - overlap)
+            right = min(1.0, x0 + (index + 1) * part_width + overlap)
+            roi = (left, max(0.0, y0 - 0.02), right, min(1.0, y1 + 0.02))
+            entry = _isolated_interest_entry(ocr_boxes(frame, roi, upscale=1.25))
+            if entry is not None:
+                entry["mode"] = f"refined-{parts}"
+                return entry
+    return None
+
+
+def _find_interest_task_entry_from_boxes(frame: np.ndarray, boxes) -> dict | None:
+    '从已读取的 OCR 框中定位兴趣圈任务。'
+    entry = _isolated_interest_entry(boxes)
+    if entry is not None:
+        return entry
+
+    
+    for box in boxes:
+        normalized = _interest_text(box[0])
+        if "浏览1次兴趣圈" in normalized and "拍照" in normalized:
+            entry = _refine_merged_interest_box(frame, box)
+            if entry is not None:
+                return entry
+
+    
+    for index, (text, x0, y0, x1, y1) in enumerate(boxes):
+        if "兴趣圈" not in text:
+            continue
+        nearby = boxes[max(0, index - 1):min(len(boxes), index + 2)]
+        combined = "".join(item[0] for item in nearby)
+        normalized = _interest_text(combined)
+        if "浏览1次兴趣圈" in normalized and "拍照" not in _interest_text(text):
+            return {
+                "pt": ((x0 + x1) * 0.5, (y0 + y1) * 0.5),
+                "text": combined,
+                "normalized": normalized,
+                "mode": "split",
+            }
+    return None
+
+
+def scan_interest_task_entry(frame: np.ndarray) -> dict:
+    '读取整帧 OCR，返回全部文字框和唯一允许点击的兴趣圈入口。'
+    boxes = ocr_boxes(frame, (0.0, 0.0, 1.0, 1.0))
+    return {
+        "boxes": boxes,
+        "entry": _find_interest_task_entry_from_boxes(frame, boxes),
+    }
+
+
+def find_interest_task_entry(frame: np.ndarray) -> dict | None:
+    '全屏定位“浏览1次兴趣圈”短语，不接受只有“拍照1次”的候选。'
+    return scan_interest_task_entry(frame)["entry"]
+
+
+def find_interest_task_card(frame: np.ndarray):
+    '兼容旧调用，返回兴趣圈任务短语位置。'
+    entry = find_interest_task_entry(frame)
+    return entry["pt"] if entry else None
 
 
 def activity_has_claim(frame: np.ndarray) -> bool:
@@ -1472,7 +1569,20 @@ def in_interest_circle(frame: np.ndarray) -> bool:
 
 
 _LIKE_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "assets" / "daily" / "interest_like_thumb.png"
+_LIKE_TEMPLATE_GRAY: np.ndarray | None = None
 _LIKE_TEMPLATE_EDGES: np.ndarray | None = None
+_LIKE_FALLBACK_SCALES = (0.82, 0.90, 1.0, 1.10, 1.20)
+
+
+def _like_template_gray() -> np.ndarray | None:
+    '缓存点赞灰度模板。'
+    global _LIKE_TEMPLATE_GRAY
+    if _LIKE_TEMPLATE_GRAY is None:
+        template = cv2.imread(str(_LIKE_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+        if template is None or template.size == 0:
+            return None
+        _LIKE_TEMPLATE_GRAY = template
+    return _LIKE_TEMPLATE_GRAY
 
 
 def _like_template_edges() -> np.ndarray | None:
@@ -1480,7 +1590,7 @@ def _like_template_edges() -> np.ndarray | None:
     global _LIKE_TEMPLATE_EDGES
     if _LIKE_TEMPLATE_EDGES is not None:
         return _LIKE_TEMPLATE_EDGES
-    template = cv2.imread(str(_LIKE_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+    template = _like_template_gray()
     if template is None or template.size == 0:
         return None
     _LIKE_TEMPLATE_EDGES = cv2.Canny(template, 50, 140)
@@ -1494,39 +1604,83 @@ def like_is_gold(frame: np.ndarray, pt, half=0.018) -> bool:
     return _gold_ratio(frame, roi) >= 0.05
 
 
-def find_like_buttons(frame: np.ndarray) -> list[dict]:
-    '在扩大后的帖子区域定位所有点赞图标。'
+def _like_template_matches(frame: np.ndarray, *, fallback: bool) -> tuple[list[dict], dict]:
+    '匹配点赞图标并返回诊断数据。'
     template = _like_template_edges()
-    if template is None:
-        return []
+    template_gray = _like_template_gray()
+    if template is None or template_gray is None:
+        return [], {"reason": "template_missing", "best_score": 0.0, "best_scale": 1.0}
     f = normalize(frame)
     sub = crop(f, R.ROI_IC_LIKE_SEARCH)
     if sub is None or sub.size == 0:
-        return []
+        return [], {"reason": "empty_roi", "best_score": 0.0, "best_scale": 1.0}
     edges = cv2.Canny(cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY), 50, 140)
-    th, tw = template.shape[:2]
-    if edges.shape[0] < th or edges.shape[1] < tw:
-        return []
-    scores = cv2.matchTemplate(edges, template, cv2.TM_CCOEFF_NORMED)
-    
-    peaks = cv2.dilate(scores, np.ones((25, 25), np.uint8))
-    ys, xs = np.where((scores >= peaks - 1e-6) & (scores >= 0.65))
     H, W = f.shape[:2]
     x0 = R.ROI_IC_LIKE_SEARCH[0] * W
     y0 = R.ROI_IC_LIKE_SEARCH[1] * H
-    raw = sorted(
-        ((float(scores[y, x]), (x0 + x + tw * 0.5) / W, (y0 + y + th * 0.5) / H)
-         for y, x in zip(ys, xs)),
-        reverse=True,
-    )
+    scales = _LIKE_FALLBACK_SCALES if fallback else (1.0,)
+    threshold = 0.60 if fallback else 0.65
+    raw: list[tuple[float, float, float, float]] = []
+    best_score = 0.0
+    best_scale = 1.0
+    for scale in scales:
+        if scale == 1.0:
+            scaled = template
+        else:
+            scaled_gray = cv2.resize(
+                template_gray,
+                None,
+                fx=scale,
+                fy=scale,
+                interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+            )
+            scaled = cv2.Canny(scaled_gray, 50, 140)
+        th, tw = scaled.shape[:2]
+        if th < 8 or tw < 8 or edges.shape[0] < th or edges.shape[1] < tw:
+            continue
+        scores = cv2.matchTemplate(edges, scaled, cv2.TM_CCOEFF_NORMED)
+        _, maximum, _, _ = cv2.minMaxLoc(scores)
+        if maximum > best_score:
+            best_score = float(maximum)
+            best_scale = float(scale)
+        peaks = cv2.dilate(scores, np.ones((25, 25), np.uint8))
+        ys, xs = np.where((scores >= peaks - 1e-6) & (scores >= threshold))
+        raw.extend(
+            (float(scores[y, x]), (x0 + x + tw * 0.5) / W,
+             (y0 + y + th * 0.5) / H, float(scale))
+            for y, x in zip(ys, xs)
+        )
+    raw.sort(reverse=True)
     hits: list[dict] = []
-    for score, cx, cy in raw:
+    for score, cx, cy, scale in raw:
         if any(abs(cx - hit["pt"][0]) < 0.025 and abs(cy - hit["pt"][1]) < 0.025 for hit in hits):
             continue
         pt = (cx, cy)
-        hits.append({"pt": pt, "gold": like_is_gold(f, pt), "score": score})
+        hits.append({"pt": pt, "gold": like_is_gold(f, pt), "score": score, "scale": scale})
     hits.sort(key=lambda hit: (round(hit["pt"][1], 2), hit["pt"][0]))
+    return hits, {
+        "reason": "matched" if hits else "below_threshold",
+        "best_score": best_score,
+        "best_scale": best_scale,
+        "threshold": threshold,
+        "fallback": fallback,
+        "count": len(hits),
+    }
+
+
+def find_like_buttons(frame: np.ndarray) -> list[dict]:
+    '定位点赞图标；原尺度失败时才进行多尺度回退。'
+    hits, _ = _like_template_matches(frame, fallback=False)
+    if hits:
+        return hits
+    hits, _ = _like_template_matches(frame, fallback=True)
     return hits
+
+
+def like_button_match_diagnostics(frame: np.ndarray) -> dict:
+    '返回点赞图标多尺度匹配诊断。'
+    _, diagnostics = _like_template_matches(frame, fallback=True)
+    return diagnostics
 
 
 
