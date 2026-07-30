@@ -1,6 +1,7 @@
 '开发版运行保护:日志、原子写入、安全键鼠动作、任务互斥。'
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import threading
@@ -133,12 +134,43 @@ def input_allowed() -> bool:
 
 
 def release_known_keys(log=dev_log) -> None:
-    for vk in (0x41, 0x44, 0x57, 0x53, 0x46, 0x1B):
+    
+    keys = (
+        0x09, 0x1B, 0x20, 0x10, 0x11, 0x12,
+        *range(0x30, 0x3A),
+        *range(0x41, 0x5B),
+    )
+    for vk in keys:
         try:
             win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
         except Exception as exc:
             try:
                 log(f"release key failed vk={vk}: {exc}")
+            except Exception:
+                pass
+    try:
+        win32api.keybd_event(
+            0,
+            0x2A,
+            getattr(win32con, "KEYEVENTF_SCANCODE", 0x0008)
+            | win32con.KEYEVENTF_KEYUP,
+            0,
+        )
+    except Exception as exc:
+        try:
+            log(f"release left shift scan code failed: {exc}")
+        except Exception:
+            pass
+    for flag in (
+        win32con.MOUSEEVENTF_LEFTUP,
+        win32con.MOUSEEVENTF_RIGHTUP,
+        win32con.MOUSEEVENTF_MIDDLEUP,
+    ):
+        try:
+            win32api.mouse_event(flag, 0, 0, 0, 0)
+        except Exception as exc:
+            try:
+                log(f"release mouse failed flag={flag}: {exc}")
             except Exception:
                 pass
 
@@ -178,6 +210,229 @@ def safe_press_key(vk: int, stop_check=None, foreground_check=None, log=dev_log,
         dev_log(f"safe_press_key failed vk={vk}", exc)
         try:
             log(f"[保护] 按键失败,已急停: {exc}")
+        except Exception:
+            pass
+        release_known_keys()
+        raise
+
+
+def safe_press_scan_code(
+    scan_code: int,
+    stop_check=None,
+    foreground_check=None,
+    log=dev_log,
+    hold_s: float = 0.05,
+) -> bool:
+    '使用硬件扫描码发送按键，供游戏不接受通用虚拟键时使用。'
+    if not _allow(stop_check, foreground_check, log):
+        return False
+    scan_flag = getattr(win32con, "KEYEVENTF_SCANCODE", 0x0008)
+    try:
+        with _INPUT_ACTION_LOCK:
+            if not _allow(stop_check, foreground_check, log):
+                return False
+            win32api.keybd_event(0, scan_code, scan_flag, 0)
+            try:
+                time.sleep(max(0.0, hold_s))
+            finally:
+                win32api.keybd_event(
+                    0,
+                    scan_code,
+                    scan_flag | win32con.KEYEVENTF_KEYUP,
+                    0,
+                )
+            return True
+    except Exception as exc:
+        dev_log(f"safe_press_scan_code failed scan={scan_code}", exc)
+        try:
+            log(f"[保护] 扫描码按键失败,已急停: {exc}")
+        except Exception:
+            pass
+        release_known_keys()
+        raise
+
+
+class SafeKeyScheduler:
+    '按下键后立即返回，并在独立调度线程中按截止时间释放。'
+
+    def __init__(
+        self,
+        stop_check=None,
+        foreground_check=None,
+        log=dev_log,
+    ) -> None:
+        self._stop_check = stop_check
+        self._foreground_check = foreground_check
+        self._log = log
+        self._condition = threading.Condition()
+        self._deadlines: list[tuple[float, int, tuple[str, int]]] = []
+        self._held: dict[tuple[str, int], int] = {}
+        self._sequence = 0
+        self._closed = False
+        self._thread: threading.Thread | None = None
+
+    def press_key(self, vk: int, hold_s: float) -> bool:
+        return self._press(("vk", int(vk)), hold_s)
+
+    def press_mapped_key(self, vk: int, hold_s: float) -> bool:
+        '把虚拟键映射为硬件扫描码，游戏拒绝普通虚拟键时使用。'
+        map_mode = getattr(win32con, "MAPVK_VK_TO_VSC", 0)
+        scan_code = int(win32api.MapVirtualKey(int(vk), map_mode)) & 0xFF
+        if scan_code:
+            return self.press_scan_code(scan_code, hold_s)
+        return self.press_key(vk, hold_s)
+
+    def press_scan_code(self, scan_code: int, hold_s: float) -> bool:
+        return self._press(("scan", int(scan_code)), hold_s)
+
+    def _press(self, key: tuple[str, int], hold_s: float) -> bool:
+        if not _allow(
+            self._stop_check,
+            self._foreground_check,
+            self._log,
+        ):
+            return False
+        try:
+            with self._condition:
+                if self._closed:
+                    return False
+                if self._held.get(key, 0) == 0:
+                    with _INPUT_ACTION_LOCK:
+                        if not _allow(
+                            self._stop_check,
+                            self._foreground_check,
+                            self._log,
+                        ):
+                            return False
+                        self._emit(key, key_up=False)
+                self._held[key] = self._held.get(key, 0) + 1
+                self._sequence += 1
+                heapq.heappush(
+                    self._deadlines,
+                    (
+                        time.monotonic() + max(0.01, float(hold_s)),
+                        self._sequence,
+                        key,
+                    ),
+                )
+                self._ensure_thread_locked()
+                self._condition.notify_all()
+            return True
+        except Exception as exc:
+            dev_log(f"SafeKeyScheduler press failed key={key}", exc)
+            try:
+                self._log(f"[保护] 定时按键失败,已急停: {exc}")
+            except Exception:
+                pass
+            self.release_all()
+            release_known_keys()
+            raise
+
+    def _ensure_thread_locked(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._release_loop,
+            name="SafeKeyRelease",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _release_loop(self) -> None:
+        while True:
+            with self._condition:
+                while not self._deadlines and not self._closed:
+                    self._condition.wait()
+                if self._closed and not self._deadlines:
+                    return
+                deadline, _sequence, key = self._deadlines[0]
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    self._condition.wait(remaining)
+                    continue
+                heapq.heappop(self._deadlines)
+                count = self._held.get(key, 0)
+                if count > 1:
+                    self._held[key] = count - 1
+                    continue
+                self._held.pop(key, None)
+                try:
+                    with _INPUT_ACTION_LOCK:
+                        self._emit(key, key_up=True)
+                except Exception as exc:
+                    dev_log(f"SafeKeyScheduler release failed key={key}", exc)
+
+    def release_all(self) -> None:
+        with self._condition:
+            held = tuple(self._held)
+            self._held.clear()
+            self._deadlines.clear()
+            self._condition.notify_all()
+            for key in held:
+                try:
+                    with _INPUT_ACTION_LOCK:
+                        self._emit(key, key_up=True)
+                except Exception as exc:
+                    dev_log(f"SafeKeyScheduler release_all failed key={key}", exc)
+
+    def close(self) -> None:
+        self.release_all()
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+            thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+
+    @staticmethod
+    def _emit(key: tuple[str, int], *, key_up: bool) -> None:
+        kind, code = key
+        up_flag = win32con.KEYEVENTF_KEYUP if key_up else 0
+        if kind == "scan":
+            scan_flag = getattr(win32con, "KEYEVENTF_SCANCODE", 0x0008)
+            win32api.keybd_event(0, code, scan_flag | up_flag, 0)
+            return
+        win32api.keybd_event(code, 0, up_flag, 0)
+
+
+def safe_mouse_button(button: str, stop_check=None, foreground_check=None,
+                      log=dev_log, hold_s: float = 0.04,
+                      hwnd: int = 0, point=None) -> bool:
+    '安全点击鼠标键；提供窗口和归一化坐标时先移动到对应位置。'
+    if not _allow(stop_check, foreground_check, log):
+        return False
+    flags = {
+        "left": (win32con.MOUSEEVENTF_LEFTDOWN, win32con.MOUSEEVENTF_LEFTUP),
+        "right": (win32con.MOUSEEVENTF_RIGHTDOWN, win32con.MOUSEEVENTF_RIGHTUP),
+        "middle": (win32con.MOUSEEVENTF_MIDDLEDOWN, win32con.MOUSEEVENTF_MIDDLEUP),
+    }
+    if button not in flags:
+        raise ValueError(f"不支持的鼠标键: {button}")
+    down_flag, up_flag = flags[button]
+    try:
+        with _INPUT_ACTION_LOCK:
+            if not _allow(stop_check, foreground_check, log):
+                return False
+            if hwnd and point is not None:
+                from winenv import client_rect_on_screen
+
+                x, y, width, height = client_rect_on_screen(hwnd)
+                if width <= 0 or height <= 0:
+                    return False
+                win32api.SetCursorPos((
+                    int(x + float(point[0]) * width),
+                    int(y + float(point[1]) * height),
+                ))
+            win32api.mouse_event(down_flag, 0, 0, 0, 0)
+            try:
+                time.sleep(max(0.0, hold_s))
+            finally:
+                win32api.mouse_event(up_flag, 0, 0, 0, 0)
+            return True
+    except Exception as exc:
+        dev_log(f"safe_mouse_button failed button={button}", exc)
+        try:
+            log(f"[保护] 鼠标按键失败,已急停: {exc}")
         except Exception:
             pass
         release_known_keys()
