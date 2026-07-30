@@ -512,10 +512,10 @@ class IncubatorTask(FieldTask):
     def run(self) -> str:
         '培养箱独立主流程，不调用 FieldTask.run，避免改变农贸作物路线。'
         ctx = self.ctx
-        if not self._goto_field():
+        if not self._goto_field_with_retry():
             if ctx.should_stop():
                 return TaskResult.ABORT
-            ctx.log(f"{self.name}:W 碎步 15 次仍无脚下框或转角失败 → 结束本任务")
+            ctx.log(f"{self.name}:重传后仍未到达培养箱操作位置 → 结束本任务")
             return TaskResult.FAIL
         if not self._left_to_col1_checked():
             if not ctx.should_stop():
