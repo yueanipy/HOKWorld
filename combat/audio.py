@@ -11,7 +11,7 @@ import numpy as np
 
 try:
     import soundcard as sc
-except ImportError:  
+except ImportError:
     sc = None
 
 
