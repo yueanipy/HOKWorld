@@ -31,7 +31,7 @@ class FriendsTask(DailyTask):
             cfg = DailyConfig()
             self.MAX_FRIENDS = int(cfg.param(self.task_id, "max_friends", self.MAX_FRIENDS))
             configured_steps = int(cfg.param(self.task_id, "max_walk_steps", self.MAX_WALK_STEPS))
-            
+
             self.MAX_WALK_STEPS = max(1, min(20, configured_steps))
         except Exception:
             pass
@@ -69,7 +69,7 @@ class FriendsTask(DailyTask):
         for page in range(self.MAX_SCROLLS + 1):
             if ctx.should_stop():
                 return None
-            
+
             frame = None
             houses = []
             rounds = max(1, int(self.PANEL_BADGE_WAIT_S / 0.25))
@@ -121,7 +121,7 @@ class FriendsTask(DailyTask):
         if not ctx.click(confirm or R.PT_DIALOG_CONFIRM):
             return False
 
-        
+
         left_old_home = ctx.wait_until(lambda frame: not rec.homeland_loaded(frame), timeout=7.0,
                                        interval=0.25, desc="离开原家园")
         if not left_old_home:
@@ -152,7 +152,7 @@ class FriendsTask(DailyTask):
         ring_peak = max(ring_values) if ring_values else 0
         ring_low = min(ring_values) if ring_values else 0
         blinking = ring_peak >= rec.ACTION_RING_MIN and ring_low <= ring_peak * 0.45
-        
+
         ready = (water_score >= rec.WATER_ACTION_TH
                  and water_score >= harvest_score and blinking)
         if ready:
@@ -178,7 +178,7 @@ class FriendsTask(DailyTask):
                 before_icon = rec.action_icon_signature(frame)
                 if not ctx.click(R.PT_PLOT_FEET):
                     return successes
-                
+
                 ctx.sleep(self.ACTION_SETTLE_S)
                 after = ctx.grab()
                 icon_change = rec.action_icon_change_score(before_icon, after)
@@ -193,7 +193,7 @@ class FriendsTask(DailyTask):
                     if successes >= needed:
                         return successes
                 else:
-                    
+
                     ctx.log(
                         f"好友浇水:点击后状态转换未确认"
                         f"(仍为闪烁水壶={still_water_ready},图标变化率={icon_change:.3f}),"
@@ -215,17 +215,17 @@ class FriendsTask(DailyTask):
             ctx.press("esc")
             ctx.wait_until(lambda fr: not rec.friend_panel_open(fr), timeout=3.0, interval=0.25)
             frame = ctx.grab()
-        
+
         if frame is not None and (rec.in_own_home(frame) or not rec.in_friend_home(frame)):
             return True
         if not ctx.press("7"):
             return False
-        
+
         ctx.sleep(1.0)
         left = ctx.wait_until(lambda fr: not rec.homeland_loaded(fr), timeout=7.0, interval=0.25,
                               desc="离开好友家")
         if not left:
-            
+
             dev_log("[daily] 好友浇水: 未采到离开好友家的黑屏帧，继续确认自家状态")
 
         stable = 0
@@ -237,7 +237,7 @@ class FriendsTask(DailyTask):
                 return False
             own = rec.in_own_home(current)
             if not own and rec.homeland_loaded(current):
-                
+
                 own = not rec.in_friend_home(current)
             stable = stable + 1 if own else 0
             return stable >= 2
@@ -250,7 +250,7 @@ class FriendsTask(DailyTask):
         if not self._ensure_homeland():
             return TaskResult.FAIL
 
-        
+
         visited: set[str] = set()
         total_successes = 0
         attempts = 0
@@ -264,7 +264,7 @@ class FriendsTask(DailyTask):
                 ctx.log("好友浇水:好友列表及下方页面没有新的蓝色水壶好友")
                 break
 
-            
+
             visited.add(friend["name"])
             attempts += 1
             ctx.log(f"好友浇水:尝试第 {attempts} 位 {friend['name']}(累计成功 {total_successes}/2)")
@@ -274,13 +274,13 @@ class FriendsTask(DailyTask):
             total_successes += gained
             ctx.log(f"好友浇水:{friend['name']}确认成功 {gained} 次,累计 {total_successes}/2")
 
-            
+
             if total_successes >= self.TARGET_SUCCESSES:
                 returned = self._return_home()
                 if returned:
                     ctx.log(f"好友浇水:累计成功 {total_successes} 次,已按7返回自家并结束任务")
                 else:
-                    
+
                     ctx.log(
                         f"好友浇水:累计成功 {total_successes} 次,按7后未确认自家状态；"
                         "浇水任务仍记为成功")
