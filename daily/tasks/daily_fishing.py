@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 import daily.recognizer as rec
+from daily import navigation as nav
 from daily.base import DailyTask, TaskResult
 from daily.tasks.daily_fishing_navigation import FishingShoreNavigator
 from world_map import WorldMapAtlas, teleport_to
@@ -19,6 +20,8 @@ from runtime_guard import dev_log
 class DailyFishingTask(DailyTask):
     task_id = "daily_fishing"
     name = "每日钓鱼(3次)"
+    handles_failure_retry = True
+    TASK_TIMEOUT_S = 180.0
 
     ROI_ALL = (0.0, 0.0, 1.0, 1.0)
     ROI_TOOL_PANEL = (0.045, 0.18, 0.38, 0.90)
@@ -83,8 +86,8 @@ class DailyFishingTask(DailyTask):
                     (sub[:, :, 1] >= 45) & (sub[:, :, 2] >= 45))
             return float(mask.mean())
 
-        
-        
+
+
         front = (ratio((0.15, 0.52, 0.43, 0.76))
                  + ratio((0.57, 0.52, 0.85, 0.76))) * 0.5
         return (ratio((0.15, 0.25, 0.85, 0.62)),
@@ -118,13 +121,13 @@ class DailyFishingTask(DailyTask):
                 interior = f[int((row_y - 0.028)*h):int((row_y + 0.025)*h),
                              int((col_x - 0.014)*w):int((col_x + 0.014)*w)]
                 if interior.size == 0 or float(cv2.cvtColor(interior, cv2.COLOR_BGR2GRAY).std()) < 8.0:
-                    continue  
+                    continue
                 pixels = strip.reshape(-1, 3)
                 vivid = pixels[(pixels[:, 1] >= 65) & (pixels[:, 2] >= 80)]
                 if len(vivid) < 0.08 * len(pixels):
                     continue
                 hue = float(np.median(vivid[:, 0]))
-                
+
                 mark = hsv[int((row_y - 0.030)*h):int((row_y - 0.007)*h),
                            int((col_x + 0.006)*w):int((col_x + 0.019)*w)]
                 selected = bool(mark.size and np.mean(
@@ -225,7 +228,7 @@ class DailyFishingTask(DailyTask):
         ctx.sleep(0.6)
         frame = ctx.grab()
         blue, green = self._rod_card_candidates(frame) if frame is not None else ([], [])
-        
+
         candidates = blue if blue else green
         dev_log(f"[daily fishing] 鱼竿识别 blue={blue} green={green} "
                 f"chosen={'blue' if blue else 'green' if green else 'none'}")
@@ -234,7 +237,7 @@ class DailyFishingTask(DailyTask):
             ctx.press("esc")
             return None
 
-        
+
         for card in candidates:
             chosen = card["pt"]
             rarity = "蓝色" if card["rarity"] == "blue" else "绿色"
@@ -287,7 +290,7 @@ class DailyFishingTask(DailyTask):
                 dev_log("[daily fishing] 激活前关闭鱼竿面板失败")
                 return None
         for attempt in (1, 2, 3):
-            
+
             if not ctx.press("4", hold_s=0.08):
                 dev_log(f"[daily fishing] 短按 4 激活鱼竿被拒绝 attempt={attempt}")
                 return None
@@ -299,7 +302,7 @@ class DailyFishingTask(DailyTask):
                 observed["state"], observed["scores"] = st, sc
                 return st in ("FISHING_READY", "WAITING_FOR_BITE")
 
-            
+
             ok = ctx.wait_until(active, timeout=5.0, interval=0.16,
                                 desc=f"鱼竿进入钓鱼态({attempt}/3)")
             dev_log(f"[daily fishing] 短按 4 激活 attempt={attempt} ok={bool(ok)} "
@@ -309,9 +312,9 @@ class DailyFishingTask(DailyTask):
             if attempt == 3:
                 return None
 
-            
-            
-            
+
+
+
             frame = ctx.grab()
             world_ready = frame is not None and self._world_hud_ready(frame)
             has_rod, quick_scores = self._quickbar_has_rod(frame)
@@ -389,7 +392,7 @@ class DailyFishingTask(DailyTask):
         rod_state = self._equip_rod_if_needed(recognizer)
         if not rod_state:
             return False
-        
+
         if rod_state == "waiting":
             return True
         if rod_state in ("ready", "equipped"):
@@ -437,7 +440,7 @@ class DailyFishingTask(DailyTask):
             dev_log(f"[daily fishing] 第三条结算复核 attempt={attempt + 1} "
                     f"state={state} reward={reward_visible} scores={scores}")
             if reward_visible or state == "RESULT_OR_TRANSITION":
-                
+
                 ctx.sleep(0.25)
                 continue
             if state in self.FISHING_ACTIVE_STATES:
@@ -447,7 +450,7 @@ class DailyFishingTask(DailyTask):
         dev_log(f"[daily fishing] 第三条结算清理到达等待上限 last_state={last_state}; "
                 "交由 ESC 退出链继续处理")
 
-    def _exit_fishing_mode(self, recognizer) -> bool:
+    def _exit_fishing_mode(self, recognizer, *, reason: str = "三次钓鱼完成") -> bool:
         '三条完成后最多按两次 ESC；钓鱼状态消失是主判据，HUD 提供退出正证据。'
         if recognizer is None:
             dev_log("[daily fishing] 退出钓鱼模式失败: recognizer=None")
@@ -462,7 +465,7 @@ class DailyFishingTask(DailyTask):
                 before_hits, before_blocked = self._world_hud_diagnostics(before)
             dev_log(f"[daily fishing] ESC#{esc_attempt} 前 state={before_state} "
                     f"hud_hits={list(before_hits)} blocked={before_blocked}")
-            ctx.log(f"{self.name}:三次钓鱼完成，按 ESC 退出钓鱼界面"
+            ctx.log(f"{self.name}:{reason}，按 ESC 退出钓鱼界面"
                     + ("（第二次确认）" if esc_attempt == 2 else ""))
             if not ctx.press("esc"):
                 dev_log(f"[daily fishing] ESC#{esc_attempt} 注入失败")
@@ -490,7 +493,7 @@ class DailyFishingTask(DailyTask):
                     return False
                 non_fishing_streak += 1
                 hud_seen.update(hits)
-                
+
                 return non_fishing_streak >= 3 and bool(hud_seen)
 
             ok = bool(ctx.wait_until(exited, timeout=3.0, interval=0.25,
@@ -506,7 +509,33 @@ class DailyFishingTask(DailyTask):
                 ctx.sleep(0.20)
         return False
 
-    def run(self) -> str:
+    def _recover_world_after_failure(self, recognizer, reason: str) -> bool:
+        '失败或超时后退出钓鱼页，并以角色 HUD 正证据确认收尾。'
+        ctx = self.ctx
+        if ctx.should_stop():
+            return False
+        frame = ctx.grab()
+        if frame is not None and rec.in_world_hud(frame):
+            return True
+        if recognizer is not None and frame is not None:
+            state = self._fishing_state(frame, recognizer)
+            if state in self.FISHING_ACTIVE_STATES or state == "RESULT_OR_TRANSITION":
+                if not self._exit_fishing_mode(recognizer, reason=reason):
+                    dev_log(
+                        f"[daily fishing] {reason}后专用退出未确认，继续公共回世界链")
+        if ctx.should_stop():
+            return False
+        ok = nav.back_to_world(ctx)
+        if ok is False:
+            dev_log(f"[daily fishing] {reason}后无法确认角色 HUD")
+            return False
+        frame = ctx.grab()
+        confirmed = frame is not None and rec.in_world_hud(frame)
+        dev_log(
+            f"[daily fishing] {reason}后清理 world_confirmed={confirmed}")
+        return confirmed
+
+    def _run_with_retry(self) -> str:
         ctx = self.ctx
         recognizer = FishingRecognizer()
         if not recognizer.ready:
@@ -521,15 +550,36 @@ class DailyFishingTask(DailyTask):
                 result = self._run_three_fish()
                 if result != TaskResult.FAIL:
                     return result
-                
+
                 if getattr(self, "_last_fishing_caught", 0) > 0:
                     return result
             if attempt == 1:
                 reason = (
                     "首次抛竿失败"
                     if prepared else "首次未完成水岸与钓鱼状态确认")
+                if not self._recover_world_after_failure(
+                        recognizer, "首次失败准备重试"):
+                    ctx.log(f"{self.name}:{reason}，但未能恢复角色界面，取消盲目重传")
+                    return TaskResult.FAIL
                 ctx.log(
                     f"{self.name}:{reason}，重新传送并完整重试一次")
                 continue
             ctx.log(f"{self.name}:第二次仍无法在水岸开始钓鱼")
         return TaskResult.FAIL
+
+    def run(self) -> str:
+        '从任务入口开始限时三分钟，失败后先清理界面再继续下一项。'
+        with self.ctx.task_timeout(self.TASK_TIMEOUT_S, self.name) as timeout:
+            result = self._run_with_retry()
+        if timeout.expired:
+            self.ctx.log(f"{self.name}:超过 3 分钟，退出钓鱼界面后继续下一项")
+            cleaned = self._recover_world_after_failure(
+                FishingRecognizer(), "三分钟超时")
+            dev_log(
+                f"[daily fishing] 总耗时超过180秒，结果=fail cleanup={cleaned}")
+            return TaskResult.FAIL
+        if result == TaskResult.FAIL and not self.ctx.should_stop():
+            cleaned = self._recover_world_after_failure(
+                FishingRecognizer(), "任务失败")
+            dev_log(f"[daily fishing] 失败收尾 cleanup={cleaned}")
+        return result
