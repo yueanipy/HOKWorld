@@ -31,10 +31,10 @@ def _pythonw() -> str:
 def relaunch_as_admin() -> None:
     '以管理员重启自身(游戏多为提权进程,普通权限发的键鼠会被 UIPI 拦截)。'
     if getattr(sys, "frozen", False):
-        
+
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, "", None, 1)
         return
-    script = os.path.abspath(sys.argv[0])     
+    script = os.path.abspath(sys.argv[0])
     ctypes.windll.shell32.ShellExecuteW(None, "runas", _pythonw(), f'"{script}"', None, 1)
 
 
@@ -43,7 +43,7 @@ def hide_console() -> None:
     try:
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)   
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
     except Exception:
         pass
 
@@ -59,13 +59,13 @@ def set_app_id(app_id: str = "yueanipy.HOKWorld") -> None:
 def set_dpi_awareness() -> None:
     '声明 Per-Monitor-V2 DPI 感知,使 win32 客户区坐标与 mss 截屏在任意缩放下口径一致。'
     try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except Exception:
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)   
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             try:
-                ctypes.windll.user32.SetProcessDPIAware()    
+                ctypes.windll.user32.SetProcessDPIAware()
             except Exception:
                 pass
 
@@ -124,7 +124,7 @@ def find_game_hwnd(prefer_foreground: bool = True, exclude_hwnd: int = 0) -> int
     win32gui.EnumWindows(_cb, None)
     if not found:
         return None
-    
+
     found.sort(key=lambda item: (item[3] if prefer_foreground else False, item[1], not item[2]), reverse=True)
     return found[0][0]
 
@@ -145,7 +145,7 @@ def last_input_tick() -> int | None:
 def allow_foreground_activation() -> bool:
     '在主界面仍有前台资格时，允许随后启动的启动器/游戏取得前台。'
     try:
-        return bool(ctypes.windll.user32.AllowSetForegroundWindow(0xFFFFFFFF))  
+        return bool(ctypes.windll.user32.AllowSetForegroundWindow(0xFFFFFFFF))
     except Exception as exc:
         dev_log("允许游戏取得前台失败", exc)
         return False
@@ -178,17 +178,17 @@ def activate_game_window(hwnd: int | None = None) -> bool:
         return False
     try:
         user32 = ctypes.windll.user32
-        user32.ShowWindowAsync(hwnd, 9 if win32gui.IsIconic(hwnd) else 5)  
+        user32.ShowWindowAsync(hwnd, 9 if win32gui.IsIconic(hwnd) else 5)
         allow_foreground_activation()
-        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)  
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
         try:
             win32gui.BringWindowToTop(hwnd)
             win32gui.SetForegroundWindow(hwnd)
         except Exception:
-            
+
             pass
         if win32gui.GetForegroundWindow() != hwnd:
-            
+
             foreground = win32gui.GetForegroundWindow()
             current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
             foreground_tid = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
@@ -230,10 +230,10 @@ def is_foreground(hwnd: int) -> bool:
         foreground = win32gui.GetForegroundWindow()
         if foreground == hwnd:
             return True
-        
+
         if foreground and win32gui.GetWindowText(foreground).strip() == GAME_TITLE:
             return False
-        
+
         target_pid = win32process.GetWindowThreadProcessId(hwnd)[1]
         foreground_pid = win32process.GetWindowThreadProcessId(foreground)[1] if foreground else 0
         return bool(target_pid and target_pid == foreground_pid)
