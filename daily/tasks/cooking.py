@@ -14,7 +14,7 @@ class CookingTask(AlchemyTask):
 
     route = TowerRouteSpec(
         target_word="烹饪",
-        
+
         turn_total_px=-1000,
         coarse_pulses=8,
         recovery_side="d",
@@ -24,9 +24,9 @@ class CookingTask(AlchemyTask):
         turn_landmark_word="荣耀塔",
         post_landmark_turn_px=0,
         turn_landmark_timeout_s=2.0,
-        
-        
-        
+
+
+
         telescope_pre_turn_steps=2,
         telescope_pre_turn_step_s=0.09,
         telescope_pre_turn_pause_s=0.08,
@@ -40,7 +40,7 @@ class CookingTask(AlchemyTask):
         telescope_recovery_side="",
         telescope_recovery_step_s=0.08,
         telescope_recovery_scan_px=(120, -240, 120),
-        
+
         climb_overshoot_recovery=True,
         climb_recovery_back_steps=5,
         climb_recovery_side="a",
