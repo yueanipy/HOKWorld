@@ -64,8 +64,8 @@ class FishingShoreNavigator:
     MAX_CORRECTION_PX = 45
     CORRECTION_MIN_TARGET_DISTANCE = 1500.0
     TARGET_STREAK = 2
-    
-    
+
+
     TARGET_PROGRESS = 0.93
     MAX_TARGET_CROSS_TRACK = 480.0
 
