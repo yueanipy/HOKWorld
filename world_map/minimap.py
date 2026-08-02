@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from fishing.template_bank import normalize
-from .core import WorldMapAtlas
+from .core import WorldMapAtlas, estimate_similarity_transform
 from .pose import PlayerMapPoseRecognizer
 
 
@@ -37,7 +37,8 @@ class MiniMapPoseRecognizer:
     CROP = (10, 8, 214, 210)
 
     def __init__(self, atlas: WorldMapAtlas | None = None) -> None:
-        self.atlas = atlas or WorldMapAtlas()
+
+        self.atlas = atlas
         self._sift = cv2.SIFT_create(
             nfeatures=900, contrastThreshold=0.02, edgeThreshold=12)
 
@@ -70,7 +71,10 @@ class MiniMapPoseRecognizer:
                 reprojection_error=None, atlas_scale=None)
 
         atlas_point, inliers, matches, error, scale, confidence = location
-        source = self.atlas.atlas_to_source_point(atlas_point)
+        atlas = self.atlas
+        if atlas is None:
+            return None
+        source = atlas.atlas_to_source_point(atlas_point)
         return MiniMapPose(
             source=source,
             atlas=atlas_point,
@@ -86,6 +90,10 @@ class MiniMapPoseRecognizer:
             self, crop: np.ndarray,
             ) -> tuple[tuple[float, float], int, int, float, float, float] | None:
         '把小地图地形仿射匹配到公共图谱。'
+        atlas = self.atlas
+        if atlas is None:
+            atlas = WorldMapAtlas()
+            self.atlas = atlas
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         height, width = gray.shape[:2]
         center = (
@@ -98,23 +106,36 @@ class MiniMapPoseRecognizer:
         keypoints, descriptors = self._sift.detectAndCompute(gray, mask)
         if descriptors is None or len(keypoints) < 20:
             return None
-        matches = self.atlas.match_feature_descriptors(descriptors, ratio=0.75)
+        for checks in (96, 384):
+            matches = atlas.match_feature_descriptors(
+                descriptors, ratio=0.75, checks=checks)
+            location = self._location_from_matches(keypoints, matches)
+            if location is not None:
+                return location
+        return None
+
+    def _location_from_matches(
+            self, keypoints, matches,
+            ) -> tuple[tuple[float, float], int, int, float, float, float] | None:
+        '验证一组小地图对应点并返回可靠位置。'
         if len(matches) < 6:
             return None
-        source_points = np.float32([
+        source_points = np.float64([
             [
                 keypoints[query_index].pt[0] + self.CROP[0],
                 keypoints[query_index].pt[1] + self.CROP[1],
             ]
             for query_index, _, _ in matches
         ])
-        atlas_points = np.float32([point for _, point, _ in matches])
-        matrix, mask_inliers = cv2.estimateAffinePartial2D(
-            source_points, atlas_points, method=cv2.RANSAC,
-            ransacReprojThreshold=6.0, maxIters=3000, confidence=0.995)
+        atlas_points = np.float64([point for _, point, _ in matches])
+        quality = np.float64([distance for _, _, distance in matches])
+        matrix, mask_inliers = estimate_similarity_transform(
+            source_points, atlas_points, quality=quality,
+            reprojection_threshold=5.0,
+            min_scale=1.05, max_scale=1.65, max_rotation_deg=8.0)
         if matrix is None or mask_inliers is None:
             return None
-        selected = mask_inliers.ravel().astype(bool)
+        selected = mask_inliers.astype(bool)
         inliers = int(np.count_nonzero(selected))
         if inliers < 5 or inliers / len(matches) < 0.50:
             return None
