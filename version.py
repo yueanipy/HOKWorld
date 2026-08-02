@@ -1,13 +1,13 @@
 '单一版本与应用元信息来源。'
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 
-APP_NAME = "HOKWorld"                  
-APP_DISPLAY = "HOKWorld · 王者荣耀世界"   
-USER_DATA_NAME = "HOKWorldScript"      
-INSTALLER_BASENAME = "HOKWorldScript"  
+APP_NAME = "HOKWorld"
+APP_DISPLAY = "HOKWorld · 王者荣耀世界"
+USER_DATA_NAME = "HOKWorldScript"
+INSTALLER_BASENAME = "HOKWorldScript"
 PUBLISHER = "Peiyu Yuan"
 
 
