@@ -8,16 +8,20 @@ from pathlib import Path
 from runtime_guard import atomic_write_json, dev_log
 
 DEFAULTS = {
-    "monthly_card_enabled": True,     
-    "game_path": "",                  
-    "daily_auto_launch_game": True,   
-    "close_script_when_game_exits": False,  
-    "auto_water_interval_minutes": 90, 
-    "auto_water_close_game": False,    
-    "auto_water_include_ranch": False, 
-    "auto_water_shutdown_hours": 0,    
-    "combat_ultimate_mode": "immediate", 
-    "combat_profile_file": "",         
+    "monthly_card_enabled": True,
+    "game_path": "",
+    "daily_auto_launch_game": True,
+    "close_script_when_game_exits": False,
+    "auto_water_interval_minutes": 90,
+    "auto_water_close_game": False,
+    "auto_water_include_ranch": False,
+    "auto_water_shutdown_hours": 0,
+    "combat_ultimate_mode": "immediate",
+    "combat_profile_file": "",
+    "route_script_file": "",
+    "route_coordinate_correction": True,
+    "route_loop_count": 1,
+    "route_seed_initialized": False,
 }
 
 
