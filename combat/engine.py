@@ -163,7 +163,7 @@ class CombatBot:
 
         rotation_index = 0
         started_at = time.monotonic()
-        
+
         next_action_at = started_at + self.FRAME_INTERVAL
         self._secondary_due = {
             sequence.hero: started_at
@@ -179,7 +179,7 @@ class CombatBot:
                 f" {sequence.switch_after_ms / 1000.0:g} 秒"
                 + (f"（技能冷却：{cooldown_text}；按最大值计时）" if cooldown_text else "")
             )
-        
+
         self._skill_due = {
             skill.key: started_at
             for skill in self.profile.skill_cooldowns
@@ -231,7 +231,7 @@ class CombatBot:
                             )
                             continue
                         if vision_status == "ultimate":
-                            
+
                             next_action_at = time.monotonic()
                             continue
 
