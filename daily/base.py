@@ -5,19 +5,21 @@ from abc import ABC, abstractmethod
 
 
 class TaskResult:
-    SUCCESS = "success"     
-    SKIP = "skip"           
-    FAIL = "fail"           
-    ABORT = "abort"         
+    SUCCESS = "success"
+    SKIP = "skip"
+    FAIL = "fail"
+    ABORT = "abort"
 
 
 class DailyTask(ABC):
     '一个每日任务。'
 
-    
+
     task_id: str = ""
-    
+
     name: str = ""
+
+    handles_failure_retry: bool = False
 
     def __init__(self, ctx) -> None:
         'ctx:一条龙运行上下文(见 orchestrator.DailyContext)——提供 capture / log /。'
