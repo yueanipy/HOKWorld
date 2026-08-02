@@ -272,7 +272,7 @@ class CombatProfile:
             raw.get("hero_order")
             or [str(raw.get("initial_hero") or "角色1").strip()]
         )
-        
+
         initial_hero = hero_order[0]
         switch_key = str(raw.get("switch_key") or "tab").strip().lower()
         if switch_key not in SUPPORTED_KEYS:
@@ -1157,7 +1157,7 @@ def _parse_secondary_sequences(
         cooldowns = _parse_skill_cooldowns(item.get("skill_cooldowns"))
         raw_switch_after = item.get("switch_after_ms", 0)
         if not actions and not cooldowns and int(raw_switch_after or 0) <= 0:
-            
+
             continue
         if not actions:
             raise ProfileError(f"辅助 {hero_name} 必须至少配置一个动作")
