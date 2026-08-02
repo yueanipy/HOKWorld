@@ -93,8 +93,8 @@ class DispatchTask(DailyTask):
             return "locked"
         if after == "reward" and not self._dismiss_reward():
             return "fail"
-        
-        
+
+
         ready = ctx.wait_until(
             lambda f: ("member" if rec.read_dispatch_button(f)[0] == "member" else
                        "locked" if rec.dispatch_daily_locked(f) else None),
@@ -111,11 +111,11 @@ class DispatchTask(DailyTask):
         if f is None:
             return False
         state, _ = rec.read_dispatch_button(f)
-        if state == "go":      
+        if state == "go":
             return True
         if state != "member":
             return False
-        
+
         if not ctx.press("f"):
             return False
         return bool(ctx.wait_until(
@@ -215,8 +215,8 @@ class DispatchTask(DailyTask):
     def _dispatch_current(self, target: str, slot_idx: int) -> str:
         '派遣当前可用槽；返回 sent/locked/nopets/fail。'
         ctx = self.ctx
-        
-        
+
+
         if not self._select_slot(slot_idx):
             dev_log(f"[daily dispatch] 派遣前重新选择槽 {slot_idx + 1} 失败")
             return "fail"
@@ -257,8 +257,8 @@ class DispatchTask(DailyTask):
             slots = rec.read_dispatch_slots(frame)
             if slot_idx < len(slots) and slots[slot_idx] == "busy":
                 return True
-            
-            
+
+
             return (
                 rec.read_dispatch_current_region(frame) == target
                 and rec.read_dispatch_button(frame)[0] == "recall"
@@ -490,7 +490,7 @@ class DispatchTask(DailyTask):
             dev_log(f"[daily dispatch] 已选槽={idx + 1} slot_state={slot_state} "
                     f"button={state} current={current} locked={locked}")
 
-            
+
             if state == "claim":
                 claim_state = self._claim_current(point)
                 if claim_state == "fail":
@@ -502,7 +502,7 @@ class DispatchTask(DailyTask):
                 if claim_state == "locked":
                     remaining_slots.discard(idx)
                     continue
-                
+
                 state = "member"
             elif locked:
                 ctx.log(
@@ -538,7 +538,7 @@ class DispatchTask(DailyTask):
                 ctx.log("宠物派遣:配置地区均已派遣，本槽无需重复派遣")
                 remaining_slots.discard(idx)
                 continue
-            
+
             if self._dispatch_count_exhausted(count):
                 ctx.log("宠物派遣:今日剩余派遣次数为0,本槽检查完成")
                 remaining_slots.discard(idx)
@@ -582,8 +582,8 @@ class DispatchTask(DailyTask):
         ctx.log(
             f"宠物派遣:领取 {claimed} 个,派出 {sent} 个"
             + (",无可用宠物" if no_pets else ""))
-        
-        
+
+
         nav.back_to_world(ctx)
         if ctx.should_stop():
             return TaskResult.ABORT
