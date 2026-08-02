@@ -72,7 +72,7 @@ class DailyConfig:
         try:
             if self._path.exists():
                 d = json.loads(self._path.read_text(encoding="utf-8"))
-                
+
                 order = [t for t in d.get("order", []) if t in TASK_REGISTRY]
                 order += [
                     t for t in DEFAULT_ORDER
@@ -84,7 +84,7 @@ class DailyConfig:
                 self._d["enabled"] = enabled
                 self._d["params"] = d.get("params", {})
         except Exception:
-            pass   
+            pass
 
     def save(self) -> None:
         try:
@@ -93,7 +93,7 @@ class DailyConfig:
         except Exception:
             pass
 
-    
+
     @property
     def order(self) -> list[str]:
         return list(self._d["order"])
@@ -119,7 +119,7 @@ class DailyConfig:
             o[i + 1], o[i] = o[i], o[i + 1]
             self.save()
 
-    
+
     def is_enabled(self, task_id: str) -> bool:
         return task_id in self._d["enabled"]
 
@@ -129,7 +129,7 @@ class DailyConfig:
         self._d["enabled"] = [t for t in self._d["order"] if t in en]
         self.save()
 
-    
+
     def param(self, task_id: str, key: str, default=None):
         return self._d["params"].get(task_id, {}).get(key, default)
 
