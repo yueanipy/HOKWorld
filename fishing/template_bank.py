@@ -12,7 +12,7 @@ import numpy as np
 
 cv2.setNumThreads(1)
 
-NORM_W = 1920  
+NORM_W = 1920
 
 
 DEFAULT_SCALES = (1.0, 0.85, 0.72, 1.18, 1.4, 0.6)
@@ -141,13 +141,13 @@ def match_scales(sub: np.ndarray, tpl: np.ndarray, scales, mask: np.ndarray | No
 @dataclass
 class Template:
     name: str
-    roi: tuple                       
+    roi: tuple
     thresh: float
-    pre: str = "gray"                
+    pre: str = "gray"
     scales: tuple = DEFAULT_SCALES
-    tpl: np.ndarray = field(default=None, repr=False)   
-    mask: np.ndarray = field(default=None, repr=False)  
-    prepared: tuple = field(default_factory=tuple, repr=False)  
+    tpl: np.ndarray = field(default=None, repr=False)
+    mask: np.ndarray = field(default=None, repr=False)
+    prepared: tuple = field(default_factory=tuple, repr=False)
 
 
 class TemplateBank:
@@ -168,7 +168,7 @@ class TemplateBank:
         if img is None:
             raise FileNotFoundError(f"模板缺失: {self.dir / file}")
         t = Template(name=name, roi=tuple(roi), thresh=float(thresh), pre=pre, scales=tuple(scales))
-        t.tpl = PREPROCESS[pre](img)   
+        t.tpl = PREPROCESS[pre](img)
         if mask:
             m = cv2.imread(str(self.dir / mask), cv2.IMREAD_GRAYSCALE)
             if m is None:
