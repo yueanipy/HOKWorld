@@ -16,7 +16,7 @@ class FarmTask(FieldTask):
     SECOND_ROUTE_EXIT_MISSES = 5
     FIFTH_ROUTE_EXIT_MISSES = 3
     ACTION_SETTLE_S = 3.0
-    ACTION_KIND_WATER_TH = 0.85  
+    ACTION_KIND_WATER_TH = 0.85
     HANDLE_HIGH_VALUE_WARNING = True
     CONTINUE_AFTER_WATER = True
     MAX_ACTION_STEPS_PER_PLOT = 12
@@ -36,8 +36,8 @@ class FarmTask(FieldTask):
                 )
         except Exception as exc:
             dev_log(f"[daily] {self.name}: 路线配置读取失败，回退默认{self.DEFAULT_ROUTE}", exc)
-        
-        
+
+
         self.FIELD_EXIT_MISSES = (
             self.SECOND_ROUTE_EXIT_MISSES
             if self.route == self.ROUTE_SECOND else self.FIFTH_ROUTE_EXIT_MISSES
