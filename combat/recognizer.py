@@ -649,7 +649,7 @@ class RedFlashDetector:
     '通过中央区域突增的横向红色警示线识别闪避时机。'
 
     MAX_PROCESSING_WIDTH = 640
-    
+
     MIN_RED_RATIO = 0.0020
     MIN_COMPONENT_RATIO = 0.00025
     MIN_HORIZONTAL_WIDTH_RATIO = 0.22
@@ -844,7 +844,7 @@ def _counter_glyph_similarity(
 def _counter_ring_score(frame, center_x: float, key_center_y: float) -> float:
     height, width = frame.shape[:2]
     best_ratio = 0.0
-    
+
     for offset_ratio in (0.043, 0.047, 0.051, 0.055):
         center_y = key_center_y - offset_ratio * height
         y0 = max(0, int(center_y - 0.048 * height))
