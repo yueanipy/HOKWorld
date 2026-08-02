@@ -21,9 +21,9 @@ from winenv import activate_game_window, can_auto_activate_game, is_foreground
 from runtime_guard import (dev_log, input_allowed, release_known_keys,
                            safe_click_norm, safe_press_key)
 
-NORM_W = 1920                       
-GAME_TITLE_KEY = "王者荣耀世界"      
-GAME_EXE_NAME = "王者荣耀世界.exe"   
+NORM_W = 1920
+GAME_TITLE_KEY = "王者荣耀世界"
+GAME_EXE_NAME = "王者荣耀世界.exe"
 
 
 
@@ -47,10 +47,10 @@ def _find_exe_under(root):
     dirs = []
     if os.path.isdir(root):
         dirs.append(root)
-        dirs += [os.path.join(root, s) for s in _safe_listdir(root)]       
+        dirs += [os.path.join(root, s) for s in _safe_listdir(root)]
         parent = os.path.dirname(root)
         if os.path.isdir(parent):
-            dirs += [os.path.join(parent, s) for s in _safe_listdir(parent)]  
+            dirs += [os.path.join(parent, s) for s in _safe_listdir(parent)]
     cands = [os.path.join(d, GAME_EXE_NAME) for d in dirs]
     cands = [p for p in cands if os.path.isfile(p)]
     if not cands:
@@ -206,7 +206,7 @@ def any_game_window():
 
 
 
-GA_ROOT = 2   
+GA_ROOT = 2
 
 
 def _win_pid(h) -> int:
@@ -249,7 +249,7 @@ def _same_process_on_top(h, sx, sy) -> bool:
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
 MK_LBUTTON = 0x0001
-_CWP_SKIP = 0x0001 | 0x0002 | 0x0004        
+_CWP_SKIP = 0x0001 | 0x0002 | 0x0004
 
 
 class _POINT(ctypes.Structure):
@@ -346,7 +346,7 @@ def _restore_no_activate(hwnd) -> bool:
     try:
         if not hwnd or not win32gui.IsWindow(hwnd):
             return False
-        
+
         _u32.ShowWindowAsync(ctypes.c_void_p(hwnd), 4)
         _u32.SetWindowPos(
             ctypes.c_void_p(hwnd), ctypes.c_void_p(1), 0, 0, 0, 0,
@@ -371,7 +371,7 @@ def _print_window_bgr(hwnd):
         bmp = win32ui.CreateBitmap()
         bmp.CreateCompatibleBitmap(mfc, w, h)
         mem.SelectObject(bmp)
-        ok = _u32.PrintWindow(ctypes.c_void_p(hwnd), ctypes.c_void_p(mem.GetSafeHdc()), 3)  
+        ok = _u32.PrintWindow(ctypes.c_void_p(hwnd), ctypes.c_void_p(mem.GetSafeHdc()), 3)
         if not ok:
             return None
         bits = bmp.GetBitmapBits(True)
@@ -425,28 +425,28 @@ def _crop(frame, roi):
 
 
 class GameLauncher:
-    TICK = 0.4                 
-    MIN_CONF = 0.5             
-    CLICK_DELAY = (0.2, 0.5)   
-    WORLD_HUD_CONFIRM = 2      
-    MONTHLY_CONFIRM = 2        
-    START_STABLE_S = 2.0       
-    TOTAL_TIMEOUT_S = 300.0    
-    LAUNCH_WAIT_S = 90.0       
-    CLOSE_GRACE_S = 6.0        
-    AFTER_CLICK_S = 1.0        
+    TICK = 0.4
+    MIN_CONF = 0.5
+    CLICK_DELAY = (0.2, 0.5)
+    WORLD_HUD_CONFIRM = 2
+    MONTHLY_CONFIRM = 2
+    START_STABLE_S = 2.0
+    TOTAL_TIMEOUT_S = 300.0
+    LAUNCH_WAIT_S = 90.0
+    CLOSE_GRACE_S = 6.0
+    AFTER_CLICK_S = 1.0
 
-    
-    ROI_LAUNCH_BTN = (0.74, 0.82, 0.97, 0.96)   
-    ROI_ANNOUNCE = (0.10, 0.15, 0.38, 0.32)     
-    ROI_START = (0.30, 0.68, 0.70, 0.86)        
-    ROI_WORLD_HUD_RIGHT = (0.70, 0.02, 1.00, 0.96)  
-    ROI_WORLD_HUD_BOTTOM = (0.00, 0.82, 0.30, 1.00) 
+
+    ROI_LAUNCH_BTN = (0.74, 0.82, 0.97, 0.96)
+    ROI_ANNOUNCE = (0.10, 0.15, 0.38, 0.32)
+    ROI_START = (0.30, 0.68, 0.70, 0.86)
+    ROI_WORLD_HUD_RIGHT = (0.70, 0.02, 1.00, 0.96)
+    ROI_WORLD_HUD_BOTTOM = (0.00, 0.82, 0.30, 1.00)
     LAUNCH_BTN_PT = (0.867, 0.892)
     CLOSE_X_PT = (0.808, 0.258)
     START_GAME_PT = (0.482, 0.820)
-    VK_ESC = 0x1B                               
-    
+    VK_ESC = 0x1B
+
     LOADING_KEYS = ("初始化", "检测版本", "检测资源", "在进入", "正在进入", "进入游戏",
                     "着色", "编译", "Unreal", "Epic", "天美", "TiMi", "加载中", "请稍候", "图形")
     WORLD_HUD_KEYS = ("抓拍", "好友", "切换", "输入", "高处")
@@ -458,17 +458,17 @@ class GameLauncher:
         self.stop_flag = False
         self.paused = False
         self.success = False
-        self._clicked_launch = False   
-        self._launch_cd = 0.0          
-        self._saw_window = False   
-        self._driving_launcher = False  
-        self._announce_tries = 0   
-        self._start_since = 0.0    
-        self._last_diag = 0.0      
-        self._launcher_hwnd = 0    
-        self._game_win_seen = False  
-        self._exit_ready = 0       
-        self._start_clicked = 0    
+        self._clicked_launch = False
+        self._launch_cd = 0.0
+        self._saw_window = False
+        self._driving_launcher = False
+        self._announce_tries = 0
+        self._start_since = 0.0
+        self._last_diag = 0.0
+        self._launcher_hwnd = 0
+        self._game_win_seen = False
+        self._exit_ready = 0
+        self._start_clicked = 0
         self._hwnd = 0
         self._restored_hwnds = set()
         self._input_tick_at_start = input_tick_at_start
@@ -477,7 +477,7 @@ class GameLauncher:
         self._foreground_handoff_done = False
         self._foreground_wait_logged = False
 
-    
+
     def stop(self) -> None:
         self.stop_flag = True
         release_known_keys(self.log)
@@ -498,9 +498,9 @@ class GameLauncher:
         fg = win32gui.GetForegroundWindow()
         if fg == h:
             return True
-        if fg and _win_pid(fg) and _win_pid(fg) == _win_pid(h):   
+        if fg and _win_pid(fg) and _win_pid(fg) == _win_pid(h):
             return True
-        if self._fg_owner_kind(fg) == "other":                    
+        if self._fg_owner_kind(fg) == "other":
             return False
         return self._visible_state(h) == "top"
 
@@ -577,14 +577,14 @@ class GameLauncher:
     def _resolve_window(self):
         '定位窗口并返回 (状态, hwnd)——后台模式(同类脚本 同款):。'
         fg = win32gui.GetForegroundWindow()
-        if fg and _is_game_title(win32gui.GetWindowText(fg)):   
+        if fg and _is_game_title(win32gui.GetWindowText(fg)):
             self._hwnd = fg
             return "act", fg
         h = any_game_window()
         if not h:
             return "gone", 0
         if win32gui.IsIconic(h):
-            
+
             if h not in self._restored_hwnds:
                 self._restored_hwnds.add(h)
                 self.log("检测到启动器/游戏最小化 → 后台无激活恢复一次")
@@ -630,7 +630,7 @@ class GameLauncher:
         return safe_press_key(
             self.VK_ESC, self._stopped, self._foreground, self.log, 0.05)
 
-    
+
     def _ocr_join(self, f, roi) -> str:
         sub = _crop(f, roi)
         if sub is None or sub.size == 0:
@@ -681,10 +681,10 @@ class GameLauncher:
         '启动器右下角按钮 → (state, 点击点):ready(启动游戏)/ exiting / ingame / none。'
         lines = self._ocr_lines(f, self.ROI_LAUNCH_BTN)
         t = "".join(ln[0] for ln in lines)
-        if "启动" in t:                       
+        if "启动" in t:
             pt = next(((cx, cy) for txt, cx, cy in lines if "启动" in txt), None)
             return "ready", (pt or self.LAUNCH_BTN_PT)
-        if "退出" in t:                       
+        if "退出" in t:
             return "exiting", None
         if "游戏中" in t or ("游戏" in t and "中" in t):
             return "ingame", None
@@ -699,7 +699,7 @@ class GameLauncher:
         for txt, cx, cy in lines:
             if "开始游戏" in txt:
                 return (cx, cy)
-        joined = "".join(ln[0] for ln in lines)   
+        joined = "".join(ln[0] for ln in lines)
         if "开始游戏" in joined:
             return next(((cx, cy) for txt, cx, cy in lines if "开始" in txt or "游戏" in txt), self.START_GAME_PT)
         return None
@@ -722,7 +722,7 @@ class GameLauncher:
             self.log("未找到《王者荣耀世界》本地安装路径;请手动打开启动器,或在 data/config.json 的 game_path 指定 exe")
             return False
         self.log(f"未检测到游戏窗口 → 本地启动:{exe}")
-        self._driving_launcher = True       
+        self._driving_launcher = True
         try:
             launch_game_exe(exe)
         except Exception as exc:
@@ -746,13 +746,13 @@ class GameLauncher:
             self.log("等待启动器窗口出现超时,已停止")
         return False
 
-    
+
     def run(self) -> bool:
         '每帧从当前画面重新判定阶段并分派动作。'
-        
+
         if self.stop_flag:
             return False
-        
+
         while self.paused and not self.stop_flag:
             time.sleep(0.2)
         if self.stop_flag:
@@ -770,7 +770,7 @@ class GameLauncher:
         self._restored_hwnds.clear()
         self.log("自动启动游戏:开始(后台识别+后台点击:不需要前台、不动你的鼠标,"
                  "你可随意看日志/用别的程序;只跑一轮,完成即停;F12 急停)")
-        
+
         if not any_game_window() and not self._ensure_launcher_running():
             return self.success
         world_hud_count = 0
@@ -780,7 +780,7 @@ class GameLauncher:
         grace = None
         self._saw_window = False
         try:
-            with GameCapture(0) as cap:        
+            with GameCapture(0) as cap:
                 while not self.stop_flag and time.time() < deadline:
                     if self.paused:
                         paused_at = time.monotonic()
@@ -790,12 +790,12 @@ class GameLauncher:
                         continue
                     state, gw = self._resolve_window()
                     if state == "gone":
-                        
-                        
-                        
-                        
-                        
-                        
+
+
+
+
+
+
                         if self._clicked_launch:
                             if self._game_win_seen:
                                 if grace is None:
@@ -820,16 +820,16 @@ class GameLauncher:
                     grace = None
                     self._saw_window = True
                     if self._clicked_launch and self._launcher_hwnd and gw and gw != self._launcher_hwnd:
-                        self._game_win_seen = True   
+                        self._game_win_seen = True
                     if state == "min":
-                        
+
                         if last != "min":
                             self.log("启动器/游戏已最小化 → 暂停(恢复后自动继续)")
                             last = "min"
                         time.sleep(0.3)
                         continue
-                    
-                    
+
+
                     f = _print_window_bgr(gw)
                     if f is None and self._visible_state(gw) == "top":
                         cap.hwnd = gw
@@ -839,20 +839,20 @@ class GameLauncher:
                         continue
                     fn = _norm1920(f)
 
-                    
-                    
-                    
+
+
+
                     btn, bpt = self.read_launch_button(fn)
                     if btn in ("ready", "exiting", "ingame"):
                         self._driving_launcher = True
                         world_hud_count = 0
                         monthly_count = 0
                     if btn != "ready":
-                        self._exit_ready = 0               
+                        self._exit_ready = 0
 
                     if btn == "ready":
-                        
-                        
+
+
                         if self._clicked_launch and self._game_win_seen:
                             self._exit_ready += 1
                             if self._exit_ready >= 2:
@@ -861,9 +861,9 @@ class GameLauncher:
                             time.sleep(self.TICK)
                             continue
                         nowt = time.time()
-                        if nowt >= self._launch_cd:        
+                        if nowt >= self._launch_cd:
                             self.log("启动器就绪 → 点击「启动游戏」")
-                            self._launcher_hwnd = self._hwnd   
+                            self._launcher_hwnd = self._hwnd
                             if self._click(bpt):
                                 self._clicked_launch = True
                                 self._launch_cd = nowt + 5.0
@@ -880,20 +880,20 @@ class GameLauncher:
                         time.sleep(self.TICK)
                         continue
                     if btn == "ingame":
-                        self._launcher_hwnd = self._hwnd   
+                        self._launcher_hwnd = self._hwnd
                         self.log("启动器显示「游戏中」→ 游戏已在运行,无需启动,直接结束")
                         self.success = True
                         return True
 
-                    
-                    
+
+
                     ann_txt = self._ocr_join(fn, self.ROI_ANNOUNCE)
                     start_lines = self._ocr_lines(fn, self.ROI_START)
                     if "公告" in ann_txt:
                         world_hud_count = 0
                         monthly_count = 0
-                        self._driving_launcher = True       
-                        self._start_since = 0.0             
+                        self._driving_launcher = True
+                        self._start_since = 0.0
                         attempt = self._announce_tries + 1
                         if not self._prepare_game_ui_input("公告"):
                             time.sleep(self.TICK)
@@ -914,8 +914,8 @@ class GameLauncher:
                     if sp:
                         world_hud_count = 0
                         monthly_count = 0
-                        
-                        
+
+
                         if self._start_since == 0.0:
                             self._start_since = time.time()
                         if (time.time() - self._start_since >= self.START_STABLE_S
@@ -928,14 +928,14 @@ class GameLauncher:
                             if self._click_game_ui(sp):
                                 self._start_clicked = attempt
                                 self.enter_game_clicked_at = time.time()
-                                self._launch_cd = time.time() + 2.0   
+                                self._launch_cd = time.time() + 2.0
                                 time.sleep(self.AFTER_CLICK_S)
                         elif last != "start_confirm":
                             self.log("检测到「开始游戏」,稳定确认中…(避开公告前的瞬时闪现)")
                             last = "start_confirm"
                         time.sleep(self.TICK)
                         continue
-                    self._start_since = 0.0                 
+                    self._start_since = 0.0
                     monthly, monthly_title, monthly_reward = self.read_monthly_card(fn)
                     if monthly:
                         monthly_count += 1
@@ -967,17 +967,17 @@ class GameLauncher:
                         continue
                     world_hud_count = 0
                     if self._start_clicked:
-                        
+
                         self._driving_launcher = True
 
-                    
-                    
-                    
+
+
+
                     start_txt = "".join(ln[0] for ln in start_lines)
                     loading = any(k in (ann_txt + start_txt) for k in self.LOADING_KEYS)
                     if self._clicked_launch or self._driving_launcher or loading:
                         if loading:
-                            self._driving_launcher = True   
+                            self._driving_launcher = True
                             if last != "loading":
                                 self.log("当前画面识别为加载/着色器，不动作…")
                                 last = "loading"
@@ -988,7 +988,7 @@ class GameLauncher:
                         elif last != "unknown_progress":
                             self.log("启动流程中的当前界面未命中已知特征，继续重新识别…")
                             last = "unknown_progress"
-                        nowt = time.time()                  
+                        nowt = time.time()
                         if nowt - self._last_diag > 3.0:
                             self._last_diag = nowt
                             dev_log(f"[launcher diag] 开始游戏ROI={start_txt!r} "
@@ -996,7 +996,7 @@ class GameLauncher:
                                     f"月卡OCR=({monthly_title!r}, {monthly_reward!r})")
                         time.sleep(self.TICK)
                         continue
-                    
+
                     if last != "unknown":
                         self.log("当前界面未确认，继续等待…")
                         last = "unknown"
