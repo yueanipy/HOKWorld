@@ -59,15 +59,15 @@ class NavigationVector:
 class PlayerMapPoseRecognizer:
     '使用颜色和轮廓识别固定渲染尺寸的青白角色箭头。'
 
-    
-    
+
+
     SEARCH_ROI = (0.10, 0.18, 0.86, 0.82)
     WHITE_LOWER = np.array([0, 0, 195], np.uint8)
     WHITE_UPPER = np.array([179, 70, 255], np.uint8)
     CYAN_LOWER = np.array([76, 50, 115], np.uint8)
     CYAN_UPPER = np.array([108, 255, 255], np.uint8)
-    
-    
+
+
     ARROW_CONTOUR = np.array(
         [[0, 0], [26, 45], [28, 23], [51, 15]], np.int32).reshape(-1, 1, 2)
 
@@ -156,7 +156,7 @@ class PlayerMapPoseRecognizer:
         if not found:
             return None
         best = found[0]
-        
+
         if len(found) > 1 and best.confidence - found[1].confidence < 0.035:
             return None
 
@@ -190,7 +190,7 @@ class PlayerMapPoseRecognizer:
         projection = centered @ axis
         low, high = np.quantile(projection, [0.18, 0.82])
 
-        
+
         normal = np.array([-axis[1], axis[0]], np.float64)
         cross = centered @ normal
         low_width = float(np.ptp(cross[projection <= low]))
@@ -247,12 +247,12 @@ class PlayerMapPoseTracker:
         distances = np.linalg.norm(points - center, axis=1)
         accepted = distances <= self.source_tolerance
         if int(np.count_nonzero(accepted)) < self.required:
-            
+
             self._poses.clear()
             self._poses.append(pose)
             return None
         if not bool(accepted[-1]):
-            
+
             self._poses.clear()
             self._poses.append(pose)
             return None
