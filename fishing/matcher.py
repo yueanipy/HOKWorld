@@ -41,13 +41,13 @@ def _limit_ocr_threads() -> None:
         import rapidocr_onnxruntime.utils as _ru
         from onnxruntime import SessionOptions as _SO
         if getattr(_ru, "SessionOptions", None) is not _SO:
-            return                       
+            return
         def _capped(*a, **k):
             so = _SO(*a, **k)
             so.intra_op_num_threads = 3
             so.inter_op_num_threads = 1
             return so
-        _ru.SessionOptions = _capped     
+        _ru.SessionOptions = _capped
     except Exception:
         pass
 
@@ -56,12 +56,12 @@ def _get_ocr():
     '惰性加载中文 OCR(首次约 1-2s)。'
     global _OCR
     if _OCR is None:
-        
-        
+
+
         with _OCR_INIT_LOCK:
             if _OCR is None:
                 from rapidocr_onnxruntime import RapidOCR
-                _limit_ocr_threads()     
+                _limit_ocr_threads()
                 _OCR = _SerializedOCR(RapidOCR())
     return _OCR
 
@@ -70,16 +70,16 @@ HERE = Path(__file__).resolve().parent
 TPL = resource_path("fishing", "templates", "raw")
 
 
-ROI_BUTTON = (0.90, 0.85, 0.978, 0.97)   
-ROI_BANNER = (0.43, 0.27, 0.57, 0.38)    
-ROI_SUCCESS = (0.0, 0.45, 0.30, 0.75)    
-ROI_CAST_MSG = (0.26, 0.15, 0.74, 0.28)  
-ROI_BAIT_PANEL = (0.42, 0.00, 0.99, 0.68) 
-ROI_LEVELCAP = (0.28, 0.36, 0.72, 0.60)  
-ROI_FBAG = (0.70, 0.83, 0.99, 0.96)      
-ROI_QTE = (0.20, 0.06, 0.84, 0.50)       
-ROI_DISC = (0.14, 0.10, 0.90, 0.82)      
-_QTE_LS = (40, 48)                       
+ROI_BUTTON = (0.90, 0.85, 0.978, 0.97)
+ROI_BANNER = (0.43, 0.27, 0.57, 0.38)
+ROI_SUCCESS = (0.0, 0.45, 0.30, 0.75)
+ROI_CAST_MSG = (0.36, 0.14, 0.64, 0.26)
+ROI_BAIT_PANEL = (0.42, 0.00, 0.99, 0.68)
+ROI_LEVELCAP = (0.28, 0.36, 0.72, 0.60)
+ROI_FBAG = (0.70, 0.83, 0.99, 0.96)
+ROI_QTE = (0.20, 0.06, 0.84, 0.50)
+ROI_DISC = (0.14, 0.10, 0.90, 0.82)
+_QTE_LS = (40, 48)
 
 CLICK_POINT = (0.568, 0.574)
 
@@ -116,61 +116,61 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 
 
 class FishingRecognizer:
-    BLACK_MEAN = 12.0     
-    BTN_MIN = 0.45        
-    BANNER_HOOK = 0.70    
-    SUCCESS_TH = 0.72     
-    RECORD_TH = 0.75      
-    QTE_IOU_TH = 0.55     
-    QTE_IOU_MARGIN = 0.10 
-    RAPID_TH = 0.50       
-    DISC_IOU_TH = 0.55    
-    DISC_IOU_MARGIN = 0.06 
+    BLACK_MEAN = 12.0
+    BTN_MIN = 0.45
+    BANNER_HOOK = 0.70
+    SUCCESS_TH = 0.72
+    RECORD_TH = 0.75
+    QTE_IOU_TH = 0.55
+    QTE_IOU_MARGIN = 0.10
+    RAPID_TH = 0.50
+    DISC_IOU_TH = 0.55
+    DISC_IOU_MARGIN = 0.06
 
-    
-    
+
+
     KEY_TPLS = ("ready_button.png", "wait_button.png", "hook_button.png", "hook_banner.png",
                 "f_putbag.png", "f_putbag_mask.png",
                 "qte_A.png", "qte_A_letmask.png", "qte_D.png", "qte_D_letmask.png", "qte_text.png")
 
     def __init__(self) -> None:
-        
+
         self.bank = TemplateBank(TPL)
-        self._letmask: dict[str, np.ndarray] = {}       
-        self._rapid_tpl = None                          
-        self._disc_mask: dict[str, np.ndarray] = {}     
-        self._disc_fish: list[np.ndarray] = []          
-        
+        self._letmask: dict[str, np.ndarray] = {}
+        self._rapid_tpl = None
+        self._disc_mask: dict[str, np.ndarray] = {}
+        self._disc_fish: list[np.ndarray] = []
+
         self.ready = all((TPL / f).exists() for f in self.KEY_TPLS)
         if not self.ready:
-            return                                      
+            return
 
         self.bank.register("ready",  "ready_button.png", ROI_BUTTON, self.BTN_MIN, pre="gray", scales=FAST_SCALES)
         self.bank.register("wait",   "wait_button.png",  ROI_BUTTON, self.BTN_MIN, pre="gray", scales=FAST_SCALES)
         self.bank.register("hook",   "hook_button.png",  ROI_BUTTON, self.BTN_MIN, pre="gray", scales=FAST_SCALES)
         self.bank.register("banner", "hook_banner.png",  ROI_BANNER, self.BANNER_HOOK, pre="gray", scales=FAST_SCALES)
-        
+
         self.bank.register("fbag",   "f_putbag.png",     ROI_FBAG,   self.RECORD_TH, pre="gray",
                            scales=DEFAULT_SCALES, mask="f_putbag_mask.png")
 
-        
+
         for k in ("A", "D", "W", "S"):
             mp = TPL / f"qte_{k}_letmask.png"
             if mp.exists():
                 m = cv2.imread(str(mp), cv2.IMREAD_GRAYSCALE)
                 if m is not None:
                     self._letmask[k] = m
-        
+
         rp = TPL / "qte_text.png"
         self._rapid_tpl = pp_gray(cv2.imread(str(rp))) if rp.exists() else None
-        
+
         for k in ("A", "D", "W", "S"):
             mp = TPL / f"qte_disc_{k}_mask.png"
             if mp.exists():
                 m = cv2.imread(str(mp), cv2.IMREAD_GRAYSCALE)
                 if m is not None:
                     self._disc_mask[k] = m
-        
+
         for k in ("F0", "F1", "F2", "F3"):
             mp = TPL / f"qte_disc_{k}_mask.png"
             if mp.exists():
@@ -178,7 +178,7 @@ class FishingRecognizer:
                 if m is not None:
                     self._disc_fish.append(m)
 
-    
+
     def is_hook(self, frame: np.ndarray) -> bool:
         '快速判上钩:中央"上钩啦"横幅 或 右下按钮变"拉杆"任一命中。'
         f = self.bank.norm(frame)
@@ -187,7 +187,7 @@ class FishingRecognizer:
         s_hook = self.bank.score("hook", f, normalized=True)
         s_wait = self.bank.score("wait", f, normalized=True)
         s_ready = self.bank.score("ready", f, normalized=True)
-        
+
         return s_hook >= 0.6 and s_hook >= max(s_wait, s_ready) + 0.10
 
     def is_success(self, frame: np.ndarray) -> bool:
@@ -246,6 +246,8 @@ class FishingRecognizer:
             return "not_water"
         if "深度不足" in t or "过浅" in t:
             return "shallow"
+        if "无法钓鱼" in t or ("当前位置" in t and "钓鱼" in t):
+            return "invalid_position"
         return None
 
     def bait_panel_lines(self, frame: np.ndarray) -> list[tuple[str, float, float]]:
@@ -347,7 +349,7 @@ class FishingRecognizer:
         if x1 - x0 < 12 or y1 - y0 < 8:
             return False
         region = cv2.cvtColor(sub[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-        base = 2.1 * hh / self._rapid_tpl.shape[0]      
+        base = 2.1 * hh / self._rapid_tpl.shape[0]
         return match_scales(region, self._rapid_tpl, (base * 0.8, base, base * 1.2)) >= self.RAPID_TH
 
     def qte_key(self, frame: np.ndarray) -> str | None:
@@ -389,7 +391,7 @@ class FishingRecognizer:
             return None
         best_key, best_v = None, 0.0
         for c in cc[0]:
-            cx, cy = int(c[0]) * 2, int(c[1]) * 2          
+            cx, cy = int(c[0]) * 2, int(c[1]) * 2
             m = self._disc_center_letter(g, cx, cy)
             if m is None:
                 continue
