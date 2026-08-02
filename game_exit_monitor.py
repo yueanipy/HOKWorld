@@ -63,8 +63,8 @@ def _is_formal_game_process(pid: int) -> bool:
         configured = os.path.normcase(os.path.abspath(launcher_path))
         if normalized == configured:
             return False
-    
-    
+
+
     return Path(image).name.casefold() != "王者荣耀世界.exe".casefold()
 
 
