@@ -18,7 +18,7 @@ def is_dev() -> bool:
 def resource_root() -> Path:
     '只读资源根目录。'
     if is_frozen():
-        
+
         meipass = getattr(sys, "_MEIPASS", None)
         return Path(meipass) if meipass else Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -32,9 +32,9 @@ def resource_path(*parts: str) -> Path:
 def user_data_dir() -> Path:
     '本机数据目录:随程序走(打包后 = exe 同级的 data\\。'
     if is_frozen():
-        base = Path(sys.executable).resolve().parent   
+        base = Path(sys.executable).resolve().parent
     else:
-        base = Path(__file__).resolve().parent          
+        base = Path(__file__).resolve().parent
     d = base / "data"
     d.mkdir(parents=True, exist_ok=True)
     return d
