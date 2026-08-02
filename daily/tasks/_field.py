@@ -12,86 +12,86 @@ from daily.base import DailyTask, TaskResult
 class FieldTask(DailyTask):
     '子类需设:NODEPT(管理地图节点)、taskid/name,并按需覆盖 DO 与参数。'
 
-    NODE_PT = None                 
-    TELEPORT_TIMEOUT_S = 30.0      
-    MAX_ROWS = 30                  
-                                   
-    SEED_NAME = ""                 
-    ROW_RETRY = 4                  
-    
-    
-    
-    
-    ACTION_BLINK_SAMPLES = 6       
-    ACTION_BLINK_INTERVAL = 0.15   
-    ACTION_BLINK_STD_MIN = 7.0     
-    ACTION_SETTLE_S = 3.0          
-    ACTION_EVIDENCE_TTL_S = 2.0    
-    ACTION_RING_PREFILTER_RATIO = 0.33  
-    POST_ACTION_RECHECKS = 2       
+    NODE_PT = None
+    TELEPORT_TIMEOUT_S = 30.0
+    MAX_ROWS = 30
+
+    SEED_NAME = ""
+    ROW_RETRY = 4
+
+
+
+
+    ACTION_BLINK_SAMPLES = 6
+    ACTION_BLINK_INTERVAL = 0.15
+    ACTION_BLINK_STD_MIN = 7.0
+    ACTION_SETTLE_S = 3.0
+    ACTION_EVIDENCE_TTL_S = 2.0
+    ACTION_RING_PREFILTER_RATIO = 0.33
+    POST_ACTION_RECHECKS = 2
     POST_ACTION_RECHECK_S = 0.25
-    POST_WATER_RECHECKS = 1        
-    MAX_WATER_CYCLES_PER_PLOT = 3  
-    MAX_ACTION_STEPS_PER_PLOT = 8  
-    CONTINUE_AFTER_WATER = False   
-    FIELD_EXIT_MISSES = 3          
-    ACTION_KIND_WATER_TH = rec.WATER_ACTION_TH  
-    GAP_TAPS = 5                   
-    STEP_S = 0.386                 
-                                   
-    LATE_STEP_S = 0.25             
-                                   
-    LATE_STEP_FROM = 4             
-    
-    
-    
-    
-    
-    
-    ARRIVE_SEQ = (("drag", 172),)  
-                                   
-                                   
-                                   
-    APPROACH_FIRST = 0.417         
-    LEFT_TAPS = 3                  
-    COL_TAP = 0.211                
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    USE_MINISTEP_APPROACH = True   
-    
-    
+    POST_WATER_RECHECKS = 1
+    MAX_WATER_CYCLES_PER_PLOT = 3
+    MAX_ACTION_STEPS_PER_PLOT = 8
+    CONTINUE_AFTER_WATER = False
+    FIELD_EXIT_MISSES = 3
+    ACTION_KIND_WATER_TH = rec.WATER_ACTION_TH
+    GAP_TAPS = 5
+    STEP_S = 0.386
+
+    LATE_STEP_S = 0.25
+
+    LATE_STEP_FROM = 4
+
+
+
+
+
+
+    ARRIVE_SEQ = (("drag", 172),)
+
+
+
+    APPROACH_FIRST = 0.417
+    LEFT_TAPS = 3
+    COL_TAP = 0.211
+
+
+
+
+
+
+
+
+
+
+
+
+
+    USE_MINISTEP_APPROACH = True
+
+
     USE_MINISTEP_ADVANCE = True
-    
-    
-    
-    ONE_ROW_FLOW_PX = 12.0         
-    MINI_STEP_S = 0.09             
-    MINI_STEP_S = 0.09             
-    MINI_SETTLE_S = 0.25           
-    FRAME_RECHECK_S = 0.08         
-    MINI_RECONFIRM_S = 0.30        
-    MINI_MAX_ADVANCE = 30          
-                                   
-                                   
-    MINI_MAX_APPROACH = 16         
-    MINI_MIN_APPROACH = 4          
-                                   
-    MINI_MIN_STEPS = 2             
+
+
+
+    ONE_ROW_FLOW_PX = 12.0
+    MINI_STEP_S = 0.09
+    MINI_STEP_S = 0.09
+    MINI_SETTLE_S = 0.25
+    FRAME_RECHECK_S = 0.08
+    MINI_RECONFIRM_S = 0.30
+    MINI_MAX_ADVANCE = 30
+
+
+    MINI_MAX_APPROACH = 16
+    MINI_MIN_APPROACH = 4
+
+    MINI_MIN_STEPS = 2
     DO_HARVEST = True
     DO_PLANT = True
     DO_WATER = True
-    HANDLE_HIGH_VALUE_WARNING = False  
+    HANDLE_HIGH_VALUE_WARNING = False
 
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
@@ -103,7 +103,7 @@ class FieldTask(DailyTask):
         except Exception as exc:
             dev_log(f"[daily] {self.task_id} 配置加载失败(用默认参数)", exc)
             return
-        
+
         for key, apply in (("rows", self._cfg_rows), ("seed", self._cfg_seed),
                            ("arrive", self._cfg_arrive)):
             v = None
@@ -149,7 +149,7 @@ class FieldTask(DailyTask):
         return "unknown", same_state_checks
 
     def _cfg_rows(self, v) -> None:
-        self.MAX_ROWS = max(1, min(40, int(v)))    
+        self.MAX_ROWS = max(1, min(40, int(v)))
 
     def _cfg_seed(self, v) -> None:
         self.SEED_NAME = str(v or "")
@@ -167,7 +167,7 @@ class FieldTask(DailyTask):
             seq.append((op, val))
         self.ARRIVE_SEQ = tuple(seq)
 
-    
+
     def _run_arrive_seq(self) -> None:
         '前置锚:默认仅 F11 重置位姿(确定起点,F7 与游戏快捷键冲突勿用)。'
         ctx = self.ctx
@@ -175,27 +175,27 @@ class FieldTask(DailyTask):
         for op, v in self.ARRIVE_SEQ:
             if ctx.should_stop():
                 return
-            if op in ("f11", "f7"):          
-                
-                
+            if op in ("f11", "f7"):
+
+
                 ctx.press(op)
                 ctx.sleep(1.0)
             elif op == "drag":
-                
-                
+
+
                 from runtime_guard import dev_log
                 for attempt in (1, 2, 3):
                     pre = ctx.grab()
                     ok = ctx.drag_camera(int(v))
-                    ctx.sleep(0.8)           
+                    ctx.sleep(0.8)
                     post = ctx.grab()
                     shift = self._scene_shift(pre, post)
-                    if ok and shift >= 6.0:  
+                    if ok and shift >= 6.0:
                         if attempt > 1:
                             dev_log(f"[daily] {self.name}: 转角第{attempt}次生效(画面差{shift:.1f})")
                         break
                     dev_log(f"[daily] {self.name}: 转角未生效(注入={ok} 画面差{shift:.1f})→ 等待后重试")
-                    ctx.sleep(1.0)           
+                    ctx.sleep(1.0)
                 else:
                     ctx.log(f"{self.name}:转角 3 次均未生效(加载过慢/窗口失焦?)")
             elif op in ("w", "a", "s", "d"):
@@ -235,15 +235,15 @@ class FieldTask(DailyTask):
         for i in range(self.MINI_MAX_APPROACH):
             if ctx.should_stop():
                 return False
-            
-            
+
+
             if i >= self.MINI_MIN_APPROACH and self._on_plot():
                 ctx.log(f"{self.name}:首步碎步 {i} 步踩上田块(第一行)")
                 dev_log(f"[daily] {self.name}: 首步碎步 {i} 步踩上第一行(下限{self.MINI_MIN_APPROACH}/单步{self.MINI_STEP_S}s)")
                 return True
             ctx.tap("w", self.MINI_STEP_S)
-            ctx.sleep(self.MINI_SETTLE_S)             
-        ctx.sleep(self.MINI_RECONFIRM_S)              
+            ctx.sleep(self.MINI_SETTLE_S)
+        ctx.sleep(self.MINI_RECONFIRM_S)
         if self._on_plot():
             ctx.log(f"{self.name}:首步碎步末尾复查踩上田块(第一行)")
             return True
@@ -258,7 +258,7 @@ class FieldTask(DailyTask):
         if ctx.should_stop():
             return False
         ctx.tap("w", self.APPROACH_FIRST)
-        ctx.sleep(0.9)                        
+        ctx.sleep(0.9)
         if self._on_plot():
             ctx.log(f"{self.name}:首步 {self.APPROACH_FIRST}s 踩上田块(第一行)")
             return True
@@ -266,8 +266,8 @@ class FieldTask(DailyTask):
         ctx.log(f"{self.name}:首步后脚下无框 → 放弃本任务(微调首步时长或转角,勿靠补步)")
         return False
 
-    STRAFE_TAP = 0.195             
-    MICRO_TAP = 0.09               
+    STRAFE_TAP = 0.195
+    MICRO_TAP = 0.09
 
     def _strafe_to_col1(self, max_taps: int = 8) -> None:
         '贴到第一列(最左侧田块):两段都带视觉确认,绝不盲退——。'
@@ -277,19 +277,19 @@ class FieldTask(DailyTask):
             if ctx.should_stop():
                 return
             ctx.tap("a", self.STRAFE_TAP)
-            ctx.sleep(0.45)                   
+            ctx.sleep(0.45)
             if not self._on_plot():
                 off = True
                 break
         if not off:
-            return                            
+            return
         for _ in range(6):
             if ctx.should_stop():
                 return
             ctx.tap("d", self.MICRO_TAP)
             ctx.sleep(0.45)
             if self._on_plot():
-                return                        
+                return
         from runtime_guard import dev_log
         dev_log(f"[daily] {self.name}: 回位微步 6 次未踩回田块(列回位失败,就地继续)")
 
@@ -297,7 +297,7 @@ class FieldTask(DailyTask):
         '传送后确保操作范围=「1行」(G 键循环 1格→4格→1行,最多按 2 次。'
         ctx = self.ctx
         from runtime_guard import dev_log
-        for presses in range(3):                     
+        for presses in range(3):
             if ctx.should_stop():
                 return
             f = ctx.grab()
@@ -305,11 +305,11 @@ class FieldTask(DailyTask):
             if "行" in t:
                 dev_log(f"[daily] {self.name}: 操作范围=1行(按G {presses}次,标签={t!r})")
                 return
-            if "格" not in t or presses == 2:        
+            if "格" not in t or presses == 2:
                 break
             dev_log(f"[daily] {self.name}: 操作范围≠1行(标签={t!r})→ 按 G 切换")
             ctx.press("g")
-            ctx.sleep(0.6)                           
+            ctx.sleep(0.6)
         dev_log(f"[daily] {self.name}: 操作范围未确认为1行(标签={t!r}),按当前模式继续")
 
     def _goto_field(self) -> bool:
@@ -319,8 +319,8 @@ class FieldTask(DailyTask):
         if not nav.teleport_via_node(
                 ctx, self.NODE_PT, timeout=self.TELEPORT_TIMEOUT_S):
             return False
-        
-        
+
+
         loaded = ctx.wait_until(
                                 rec.homeland_loaded,
                                 timeout=self.TELEPORT_TIMEOUT_S,
@@ -331,14 +331,14 @@ class FieldTask(DailyTask):
             dev_log(
                 f"[daily] {self.name}: 传送 {self.TELEPORT_TIMEOUT_S:g}s"
                 " 未见「居所」标题 → 到位失败")
-            return False                     
-        ctx.sleep(0.8)                       
-        self._ensure_row_mode()              
-        ctx.center_camera()                  
-        self._run_arrive_seq()               
-        if not self._approach_field():       
             return False
-        return True                          
+        ctx.sleep(0.8)
+        self._ensure_row_mode()
+        ctx.center_camera()
+        self._run_arrive_seq()
+        if not self._approach_field():
+            return False
+        return True
 
     def _goto_field_with_retry(self) -> bool:
         '田地首次到位失败时，重新传送并完整执行一次到位流程。'
@@ -355,7 +355,7 @@ class FieldTask(DailyTask):
         ctx.log(f"{self.name}:重试后仍到位失败 → 放弃本任务")
         return False
 
-    
+
     def _ring_active(self, samples: int = 6, interval: float = 0.15) -> bool:
         '右下按钮是否真高亮(=可操作)。'
         ctx = self.ctx
@@ -392,8 +392,8 @@ class FieldTask(DailyTask):
         '浇当前位置——需不需要浇看右下角浇水壶按钮(白壶模板),不看蓝框(20260711 用户拍板:。'
         ctx = self.ctx
         from runtime_guard import dev_log
-        
-        
+
+
         reused = wait_pot_s <= 0 and self._consume_action_evidence("water")
         if reused:
             pot = True
@@ -402,7 +402,7 @@ class FieldTask(DailyTask):
         elif wait_pot_s > 0:
             self._clear_action_evidence()
             pot = ctx.wait_until(rec.water_action_available, timeout=wait_pot_s,
-                                 interval=0.25, desc="")   
+                                 interval=0.25, desc="")
             active = self._ring_active() if pot else False
         else:
             pot = self._water_available()
@@ -413,28 +413,28 @@ class FieldTask(DailyTask):
         if not active:
             dev_log(f"[daily] {self.name}: 浇水跳过(壶在但**金环未激活**=不可浇,如倒计时中)")
             return False
-        
+
         for attempt in range(self.ROW_RETRY):
             if ctx.should_stop():
                 return False
-            pt = R.PT_PLOT_FEET              
-                                             
+            pt = R.PT_PLOT_FEET
+
             before = ctx.grab()
             before_signature = rec.action_icon_signature(before) if before is not None else None
             dev_log(f"[daily] {self.name}: 浇水点击#{attempt + 1} pt={pt}(脚下点)")
             self._clear_action_evidence()
             ctx.click(pt)
-            ctx.sleep(self.ACTION_SETTLE_S)  
+            ctx.sleep(self.ACTION_SETTLE_S)
             f2 = ctx.grab()
             if f2 is not None and rec.seed_panel_open(f2):
-                
+
                 ctx.log(f"{self.name}:点击误开种子面板 → ESC 关闭重试")
                 dev_log(f"[daily] {self.name}: 浇水#{attempt + 1} 误开种子面板 → ESC 重试")
                 ctx.press("esc")
                 ctx.wait_until(lambda fr: not rec.seed_panel_open(fr),
                                timeout=3.0, interval=0.4, desc="种子面板关闭")
                 continue
-            
+
             if self._action_transition_confirmed("water", before_signature):
                 dev_log(f"[daily] {self.name}: 浇水#{attempt + 1} 生效(图标状态已切换)")
                 return True
@@ -457,7 +457,7 @@ class FieldTask(DailyTask):
                 dev_log(f"[daily] {self.name}: 复用同轮harvest联合凭据，执行前不重复采样")
             else:
                 f = ctx.grab()
-                
+
                 allowed = bool(f is not None and rec.harvest_action_available(f)
                                and self._ring_active())
             if not allowed:
@@ -466,12 +466,12 @@ class FieldTask(DailyTask):
                 return clicked
             before = ctx.grab()
             before_signature = rec.action_icon_signature(before) if before is not None else None
-            pt = R.PT_ACTION_ROW if i == 0 else R.PT_ACTION_GOLD   
+            pt = R.PT_ACTION_ROW if i == 0 else R.PT_ACTION_GOLD
             dev_log(f"[daily] {self.name}: 收割点击#{i + 1} {'「1行」' if i == 0 else '金按钮'}")
             self._clear_action_evidence()
             ctx.click(pt)
             clicked = True
-            ctx.sleep(self.ACTION_SETTLE_S)  
+            ctx.sleep(self.ACTION_SETTLE_S)
             if self._action_transition_confirmed("harvest", before_signature):
                 dev_log(f"[daily] {self.name}: 收割生效(图标状态已切换,点击{i + 1}次)")
                 return True
@@ -516,13 +516,13 @@ class FieldTask(DailyTask):
     def _pick_seed_and_confirm(self) -> bool:
         '种子面板内:换页签找目标种子(文本识别)→ 点种子 → 点「选择」。'
         ctx = self.ctx
-        
-        
+
+
         for k, tx in enumerate(R.SEED_TAB_XS):
             if ctx.should_stop():
                 return False
             if k == 0:
-                continue                     
+                continue
             ctx.click((tx, R.SEED_TAB_Y))
             ctx.sleep(0.5)
             f = ctx.grab()
@@ -531,28 +531,28 @@ class FieldTask(DailyTask):
             if self.SEED_NAME:
                 pt = rec.find_seed(f, self.SEED_NAME)
             else:
-                names = rec.seed_names(f)    
+                names = rec.seed_names(f)
                 pt = names[0][1:] if names else None
             if pt:
                 ctx.click(pt)
                 ctx.sleep(0.4)
-                ctx.click(R.PT_SEED_SELECT)          
-                ctx.sleep(self.ACTION_SETTLE_S)      
+                ctx.click(R.PT_SEED_SELECT)
+                ctx.sleep(self.ACTION_SETTLE_S)
                 f2 = ctx.grab()
                 warned, confirmed = self._handle_high_value_warning(f2)
                 if warned:
                     return confirmed
                 if f2 is not None and rec.seedling_insufficient(f2):
                     ctx.log("幼苗不足 → 我知道了(跳过种植,绝不自动购买)")
-                    ctx.click(R.PT_DIALOG_CANCEL)    
+                    ctx.click(R.PT_DIALOG_CANCEL)
                     ctx.sleep(0.5)
-                    ctx.press("esc")                 
+                    ctx.press("esc")
                     ctx.wait_until(lambda fr: not rec.seed_panel_open(fr),
                                    timeout=3.0, interval=0.4, desc="种子面板关闭")
                     return False
                 return True
         ctx.log("种子面板未找到可选种子(限时页已按约定跳过)")
-        ctx.press("esc")                             
+        ctx.press("esc")
         return False
 
     def _handle_high_value_warning(self, frame) -> tuple[bool, bool]:
@@ -570,7 +570,7 @@ class FieldTask(DailyTask):
         if not ctx.click(no_remind_pt):
             dev_log("[daily] 农贸作物: 点击今日不再提示圆圈失败")
             return True, False
-        ctx.sleep(0.25)  
+        ctx.sleep(0.25)
         if not ctx.click(confirm_pt):
             dev_log("[daily] 农贸作物: 点击高售价提示确定失败")
             return True, False
@@ -600,7 +600,7 @@ class FieldTask(DailyTask):
         ctx.click(R.PT_PROF_DISMISS)
         ctx.wait_until(lambda fr: not rec.proficiency_overlay(fr),
                        timeout=3.0, interval=0.4, desc="熟练度浮层关闭")
-        ctx.sleep(0.3)                               
+        ctx.sleep(0.3)
         return True
 
     def _plant_here(self, check_prof: bool = False) -> tuple[bool, bool]:
@@ -610,13 +610,13 @@ class FieldTask(DailyTask):
         f = ctx.grab()
         if f is not None and rec.seed_panel_open(f):
             self._clear_action_evidence()
-            planted = self._pick_seed_and_confirm()  
+            planted = self._pick_seed_and_confirm()
             return planted, planted
-        for attempt in (1, 2, 3):                    
+        for attempt in (1, 2, 3):
             self._clear_action_evidence()
-            if not ctx.click(R.PT_PLOT_FEET):        
+            if not ctx.click(R.PT_PLOT_FEET):
                 return False, True
-            ctx.sleep(self.ACTION_SETTLE_S)          
+            ctx.sleep(self.ACTION_SETTLE_S)
             f2 = ctx.grab()
             if f2 is None:
                 continue
@@ -639,8 +639,8 @@ class FieldTask(DailyTask):
                 dev_log(f"[daily] {self.name}: 种植点击#{attempt} 生效"
                         f"(右下切换水壶={water_score:.2f},标签={plant_text!r})")
                 return True, True
-            
-            
+
+
             if check_prof and self._dismiss_proficiency():
                 dev_log(f"[daily] {self.name}: 种植点击#{attempt} 被熟练度浮层吞掉 → 已关闭,重试点田")
                 continue
@@ -649,7 +649,7 @@ class FieldTask(DailyTask):
         dev_log(f"[daily] {self.name}: 种植:3 次均未确认面板或水壶状态 → 本行不标记种植完成")
         return False, True
 
-    
+
     def _advance_next_row(self) -> bool:
         '前进一行(换行:碎步 or 单发,由 USEMINISTEPADVANCE 切换)。'
         return self._advance_next_row_ministep() if self.USE_MINISTEP_ADVANCE else self._advance_next_row_single()
@@ -661,43 +661,43 @@ class FieldTask(DailyTask):
         if ctx.should_stop():
             return False
         self._clear_action_evidence()
-        
-        
+
+
         none_streak = 0
-        for i in range(self.MINI_MAX_ADVANCE):   
+        for i in range(self.MINI_MAX_ADVANCE):
             if ctx.should_stop():
                 return False
-            self._clear_action_evidence()         
+            self._clear_action_evidence()
             ctx.tap("w", self.MINI_STEP_S)
             cur = ctx.grab()
-            
+
             state = rec.plot_frame_state(cur, R.ROI_PLOT_FEET_TIGHT) if cur is not None else None
             if state is None:
-                
+
                 ctx.sleep(self.FRAME_RECHECK_S)
                 cur = ctx.grab()
                 state = (rec.plot_frame_state(cur, R.ROI_PLOT_FEET_TIGHT)
                          if cur is not None else None)
-            
-            
-            
-            if state is not None and i + 1 >= self.MINI_MIN_STEPS:   
-                none_streak = 0                  
-                
-                
+
+
+
+            if state is not None and i + 1 >= self.MINI_MIN_STEPS:
+                none_streak = 0
+
+
                 fast_gold = rec.action_ring_gold_px(cur)
                 prefilter_min = max(1, int(rec.ACTION_RING_MIN * self.ACTION_RING_PREFILTER_RATIO))
                 if fast_gold < prefilter_min:
                     continue
-                
-                
+
+
                 dev_log(f"[daily] {self.name}: 碎步换行 {i + 1}步 金环预门={fast_gold}/{prefilter_min}")
                 kind = self._action_kind()
                 if kind is not None:
                     dev_log(f"[daily] {self.name}: 碎步换行 {i + 1}步 联合判定={kind}"
                             f"(框={state}) → 停下操作并缓存凭据")
                     return True
-            
+
             if state is None:
                 none_streak += 1
                 dev_log(f"[daily] {self.name}: 碎步换行 第{i + 1}步紧脚框=None"
@@ -710,9 +710,9 @@ class FieldTask(DailyTask):
                     return False
             else:
                 none_streak = 0
-        
-        
-        
+
+
+
         dev_log(f"[daily] {self.name}: 碎步换行达步数上限 {self.MINI_MAX_ADVANCE}步 → 直接结束本田")
         ctx.log(f"{self.name}:达 {self.MINI_MAX_ADVANCE} 步上限 → 结束本田任务")
         return False
@@ -727,41 +727,41 @@ class FieldTask(DailyTask):
         if f is not None and rec.board_ahead(f):
             ctx.log(f"{self.name}:看见公告牌 → 行尾")
             return False
-        ctx.sleep(0.5)                       
+        ctx.sleep(0.5)
         prev = ctx.grab()
         acc = 0.0
-        for i in range(self.MINI_MAX_ADVANCE):   
+        for i in range(self.MINI_MAX_ADVANCE):
             if ctx.should_stop():
                 return False
             ctx.tap("w", self.MINI_STEP_S)
-            ctx.sleep(self.MINI_SETTLE_S)    
+            ctx.sleep(self.MINI_SETTLE_S)
             cur = ctx.grab()
             dy = 0.0
             if prev is not None and cur is not None:
                 dy = rec.ground_shift_dy(prev, cur)
-                if dy > 0:                   
+                if dy > 0:
                     acc += dy
             prev = cur
             dev_log(f"[daily] {self.name}: 光流碎步 第{i + 1}步 dy={dy:+.1f} 累计{acc:.1f}px"
-                    f"(阈{self.ONE_ROW_FLOW_PX})")   
-            
-            
-            
+                    f"(阈{self.ONE_ROW_FLOW_PX})")
+
+
+
             if acc >= self.ONE_ROW_FLOW_PX:
                 state = rec.plot_frame_state(cur) if cur is not None else None
-                if state is None:            
+                if state is None:
                     ctx.sleep(0.4)
                     cur = ctx.grab()
                     state = rec.plot_frame_state(cur) if cur is not None else None
                 dev_log(f"[daily] {self.name}: 光流碎步换行 {i + 1}步 累计位移{acc:.1f}px"
                         f"(阈{self.ONE_ROW_FLOW_PX}) 分色={state}")
-                if state is None:            
+                if state is None:
                     left = len(rec.water_bubbles(cur)) if cur is not None else 0
                     ctx.log(f"{self.name}:换行后脚下无框 → 田垄走完"
                             + (f"(仍见 {left} 气泡)" if left else ""))
                     return False
-                return True                  
-        
+                return True
+
         dev_log(f"[daily] {self.name}: 光流碎步撞安全上限 {self.MINI_MAX_ADVANCE}步 仅累计{acc:.1f}px")
         ctx.log(f"{self.name}:换行撞安全上限 → 结束(疑卡住;查 ONE_ROW_FLOW_PX/MINI_STEP_S)")
         return False
@@ -776,26 +776,26 @@ class FieldTask(DailyTask):
         if f is not None and rec.board_ahead(f):
             ctx.log(f"{self.name}:看见公告牌 → 行尾")
             return False
-        ctx.sleep(0.5)                       
+        ctx.sleep(0.5)
         seen_gap = False
-        marks = []                           
+        marks = []
         for i in range(self.MINI_MAX_ADVANCE):
             if ctx.should_stop():
                 return False
             ctx.tap("w", self.MINI_STEP_S)
-            ctx.sleep(self.MINI_SETTLE_S)    
+            ctx.sleep(self.MINI_SETTLE_S)
             f = ctx.grab()
             present = rec.plot_frame_present(f) if f is not None else False
             if not present:
-                seen_gap = True              
+                seen_gap = True
                 marks.append(".")
                 continue
             if not (seen_gap and i + 1 >= self.MINI_MIN_STEPS):
-                marks.append("=")            
+                marks.append("=")
                 continue
-            
+
             marks.append("^")
-            ctx.sleep(self.MINI_RECONFIRM_S)  
+            ctx.sleep(self.MINI_RECONFIRM_S)
             st2 = None
             f2 = ctx.grab()
             if f2 is not None:
@@ -803,11 +803,11 @@ class FieldTask(DailyTask):
             dev_log(f"[daily] {self.name}: 碎步换行到下一行 轨迹[{''.join(marks)}] {i + 1}步 分色={st2}")
             return True
         left = len(rec.water_bubbles(f)) if f is not None else 0
-        if seen_gap:                          
+        if seen_gap:
             ctx.log(f"{self.name}:碎步过沟后无下一行框 → 浇水结束"
                     + (f"(画面仍见 {left} 个水壶气泡,未处理)" if left else ""))
             dev_log(f"[daily] {self.name}: 碎步换行结束 轨迹[{''.join(marks)}]({self.MINI_MAX_ADVANCE}步用尽)")
-        else:                                 
+        else:
             dev_log(f"[daily] {self.name}: 碎步 {self.MINI_MAX_ADVANCE} 步未离开当前行 轨迹[{''.join(marks)}](疑卡住)")
             ctx.log(f"{self.name}:碎步换行未推进 → 结束(检查 MINI_STEP_S/MINI_MAX_ADVANCE)")
         return False
@@ -822,16 +822,16 @@ class FieldTask(DailyTask):
         if f is not None and rec.board_ahead(f):
             ctx.log(f"{self.name}:看见公告牌 → 行尾")
             return False
-        ctx.sleep(0.5)                       
-        self._adv_w_count = getattr(self, "_adv_w_count", 0) + 1   
+        ctx.sleep(0.5)
+        self._adv_w_count = getattr(self, "_adv_w_count", 0) + 1
         step_s = self.LATE_STEP_S if self._adv_w_count >= self.LATE_STEP_FROM else self.STEP_S
-        ctx.tap("w", step_s)                 
+        ctx.tap("w", step_s)
         dev_log(f"[daily] {self.name}: 第{self._adv_w_count}次换行 W={step_s}s")
-        ctx.sleep(0.9)                       
+        ctx.sleep(0.9)
         f = ctx.grab()
         state = rec.plot_frame_state(f) if f is not None else None
         if state is None:
-            
+
             ctx.sleep(0.4)
             f = ctx.grab()
             state = rec.plot_frame_state(f) if f is not None else None
@@ -854,10 +854,10 @@ class FieldTask(DailyTask):
             if ctx.should_stop():
                 return
             ctx.tap("a", self.COL_TAP)
-            ctx.sleep(0.7)                           
+            ctx.sleep(0.7)
         dev_log(f"[daily] {self.name}: A×{self.LEFT_TAPS} 到最左格(脚下框={self._on_plot()})")
 
-    
+
     def _action_blinking(self, samples: int | None = None, interval: float | None = None,
                          quiet: bool = False) -> bool:
         '右下动作按钮是否在闪烁(=可操作:浇/收/种)。'
@@ -877,7 +877,7 @@ class FieldTask(DailyTask):
                     grays.append(g.astype(np.float32))
             ctx.sleep(iv)
         if len(grays) < 3 or len({g.shape for g in grays}) != 1:
-            return not quiet                         
+            return not quiet
         std = float(np.stack(grays).std(axis=0).mean())
         active = std >= self.ACTION_BLINK_STD_MIN
         if not quiet:
@@ -894,8 +894,8 @@ class FieldTask(DailyTask):
             dev_log(f"[daily] {self.name}: 复用停步同轮{kind}凭据，跳过重复金环/图标采样")
             return kind
         self._action_evidence = None
-        
-        
+
+
         f0 = ctx.grab()
         if f0 is None or rec.plot_frame_state(f0, R.ROI_PLOT_FEET_TIGHT) is None:
             ctx.sleep(0.3)
@@ -903,18 +903,18 @@ class FieldTask(DailyTask):
             if f0 is None or rec.plot_frame_state(f0, R.ROI_PLOT_FEET_TIGHT) is None:
                 dev_log(f"[daily] {self.name}: 行判定 kind=None(脚下无框=不在田上)")
                 return None
-        
-        
-        
-        
+
+
+
+
         ring, ws, hs = [], 0.0, 0.0
         peak_frame, peak_ring = None, -1
-        for _ in range(6):                   
+        for _ in range(6):
             if ctx.should_stop():
                 return None
             f = ctx.grab()
             if f is not None:
-                ws = max(ws, rec.water_action_score(f))     
+                ws = max(ws, rec.water_action_score(f))
                 hs = max(hs, rec.harvest_action_score(f))
                 gold = rec.action_ring_gold_px(f)
                 ring.append(gold)
@@ -923,9 +923,9 @@ class FieldTask(DailyTask):
             ctx.sleep(0.15)
         mx = max(ring) if ring else 0
         mn = min(ring) if ring else 0
-        active = mx >= rec.ACTION_RING_MIN and mn <= mx * 0.45   
-        
-        
+        active = mx >= rec.ACTION_RING_MIN and mn <= mx * 0.45
+
+
         clear_water = (active and ws >= max(self.ACTION_KIND_WATER_TH, 0.90)
                        and ws >= hs + 0.12)
         clear_harvest = (active and hs >= max(rec.HARVEST_ACTION_TH + 0.18, 0.85)
@@ -935,22 +935,22 @@ class FieldTask(DailyTask):
                       and not clear_water and not clear_harvest else "")
         plant_label = "更换" in plant_text
         if not active:
-            kind = None                      
+            kind = None
         elif clear_water:
             kind = "water"
         elif clear_harvest:
             kind = "harvest"
         elif plant_label:
-            kind = "plant"                  
+            kind = "plant"
         elif (expect_plant and hs < rec.HARVEST_ACTION_TH
               and ws < self.ACTION_KIND_WATER_TH):
-            kind = "plant"                  
+            kind = "plant"
         elif ws >= self.ACTION_KIND_WATER_TH and ws >= hs:
-            kind = "water"                   
+            kind = "water"
         elif hs >= rec.HARVEST_ACTION_TH:
             kind = "harvest"
         else:
-            kind = "plant"                   
+            kind = "plant"
         dev_log(f"[daily] {self.name}: 行判定 kind={kind}(环峰{mx}/谷{mn}/阈{rec.ACTION_RING_MIN}"
                 f" 水分{ws:.2f}/分类阈{self.ACTION_KIND_WATER_TH}"
                 f" 镰分{hs:.2f}/阈{rec.HARVEST_ACTION_TH}"
@@ -964,15 +964,15 @@ class FieldTask(DailyTask):
         ctx = self.ctx
         if not self._goto_field_with_retry():
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-        self._left_to_col1()                         
+        self._left_to_col1()
         can_plant = self.DO_PLANT
-        self._adv_w_count = 0                         
+        self._adv_w_count = 0
         for row in range(1, self.MAX_ROWS + 1):
             if ctx.should_stop():
                 return TaskResult.ABORT
             ctx.log(f"{self.name}:第 {row} 行(上限 {self.MAX_ROWS})")
-            
-            
+
+
             done_ops: set = set()
             did_any, none_waits, harvest_clicked = False, 0, False
             after_water = False
@@ -984,12 +984,12 @@ class FieldTask(DailyTask):
                 expect_plant = (can_plant and "harvest" in done_ops and "plant" not in done_ops)
                 kind = self._action_kind(expect_plant=expect_plant)
                 if kind is None:
-                    
-                    
+
+
                     if harvest_clicked and self._dismiss_proficiency():
                         continue
-                    
-                    
+
+
                     recheck_limit = (self.POST_WATER_RECHECKS if after_water
                                      else self.POST_ACTION_RECHECKS)
                     if did_any and none_waits < recheck_limit:
@@ -998,7 +998,7 @@ class FieldTask(DailyTask):
                         continue
                     if not did_any:
                         ctx.log(f"{self.name}:第 {row} 行 灰暗不可操作 → 跳过")
-                    break                            
+                    break
                 none_waits = 0
                 if after_water:
                     decision, same_water_checks = self._post_water_followup(
@@ -1013,16 +1013,16 @@ class FieldTask(DailyTask):
                         after_water = False
                 if kind == "harvest":
                     if not self.DO_HARVEST or "harvest" in done_ops:
-                        break                        
-                    harvest_clicked = self._harvest_here()   
+                        break
+                    harvest_clicked = self._harvest_here()
                     if not harvest_clicked:
                         ctx.log(f"{self.name}:第 {row} 行收割未实际点击，未标记完成，原地重新识别")
                         continue
                     done_ops.add("harvest")
                     did_any = True
-                    ctx.sleep(0.5)                   
-                    self._dismiss_proficiency()      
-                    continue                         
+                    ctx.sleep(0.5)
+                    self._dismiss_proficiency()
+                    continue
                 if kind == "plant":
                     if not can_plant or "plant" in done_ops:
                         break
@@ -1032,7 +1032,7 @@ class FieldTask(DailyTask):
                         break
                     done_ops.add("plant")
                     did_any = True
-                    continue                         
+                    continue
                 if self.DO_WATER:
                     if self._water_here():
                         did_any = True
@@ -1057,5 +1057,5 @@ class FieldTask(DailyTask):
                 ctx.log(f"{self.name}:共处理 {row} 行,结束")
                 break
         nav.back_to_world(ctx)
-        
+
         return TaskResult.ABORT if ctx.should_stop() else TaskResult.SUCCESS
