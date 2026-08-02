@@ -74,14 +74,14 @@ class _PerfStats:
 
 
 class GatherPicker:
-    DETECT_INTERVAL = 0.02     
-    IDLE_INTERVAL = 0.05       
-    IDLE_AFTER = 180.0         
-    RETRY_GAP = 0.25          
-    MAX_PRESS = 20            
-    ABSENT_RESET = 0.3       
-    NOTEXT_MAX = 4           
-    NOTEXT_GAP = 0.02        
+    DETECT_INTERVAL = 0.02
+    IDLE_INTERVAL = 0.05
+    IDLE_AFTER = 180.0
+    RETRY_GAP = 0.25
+    MAX_PRESS = 20
+    ABSENT_RESET = 0.3
+    NOTEXT_MAX = 4
+    NOTEXT_GAP = 0.02
 
     def __init__(self, log=print, on_count=lambda n: None, on_foreground=lambda active: None) -> None:
         self.rec = GatherRecognizer()
@@ -118,7 +118,7 @@ class GatherPicker:
         return self.rec.judge(kind, self.rec.read_name(fn))
 
     def run(self) -> None:
-        
+
         if self.stop_flag:
             return
         self.picked = 0
@@ -137,17 +137,17 @@ class GatherPicker:
                  f"碰撞名单 {len(self.rec.blacklist)} 条 / 白名单 {len(self.rec.whitelist)} 条;"
                  "NPC/商店/对话不动;仅游戏前台;F12 急停)")
 
-        prompt_active = False      
-        decided_press = False      
-        skip_logged = False        
-        press_round = 0            
-        notext_round = 0           
-        rechecking = False         
-        last_recheck = 0.0         
-        last_press = 0.0           
-        last_seen = 0.0            
-        last_foreground = None     
-        
+        prompt_active = False
+        decided_press = False
+        skip_logged = False
+        press_round = 0
+        notext_round = 0
+        rechecking = False
+        last_recheck = 0.0
+        last_press = 0.0
+        last_seen = 0.0
+        last_foreground = None
+
         last_prompt = time.time() - self.IDLE_AFTER
         text = ""
         perf = _PerfStats()
@@ -166,11 +166,11 @@ class GatherPicker:
                             self.log("游戏已回到前台 → 自动继续")
                     if self.paused or not foreground:
                         frames.set_enabled(False)
-                        prompt_active = False        
+                        prompt_active = False
                         time.sleep(0.2)
                         continue
                     now = time.time()
-                    
+
                     interval = (self.DETECT_INTERVAL if now - last_prompt < self.IDLE_AFTER
                                 else self.IDLE_INTERVAL)
                     snapshot = frames.get_frame(
@@ -179,17 +179,17 @@ class GatherPicker:
                     if f is None:
                         continue
                     classify_started = time.perf_counter()
-                    kind, fn = self.rec.classify(f)        
+                    kind, fn = self.rec.classify(f)
                     perf.add_classify(time.perf_counter() - classify_started)
                     if kind != "none":
-                        last_prompt = now                    
-                    
+                        last_prompt = now
+
                     actionable = kind in ("pick", "chongxian") or (kind == "other" and self.rec.whitelist)
                     if actionable:
                         last_seen = now
                         rising = not prompt_active
-                        
-                        
+
+
                         due = (rising
                                or (decided_press and press_round < self.MAX_PRESS
                                    and now - last_press >= self.RETRY_GAP)
@@ -198,8 +198,8 @@ class GatherPicker:
                         if due:
                             used_ocr = not (kind == "chongxian" and not self.rec.whitelist)
                             if used_ocr:
-                                
-                                
+
+
                                 detail = frames.get_frame(
                                     self.DETECT_INTERVAL, [GATHER_REGION], timeout=0.5)
                                 detail_frame = detail.frame if detail else None
@@ -218,7 +218,7 @@ class GatherPicker:
                                 used_ocr = not (
                                     kind == "chongxian" and not self.rec.whitelist)
                             decide_started = time.perf_counter()
-                            press, text, reason = self._decide(kind, fn)   
+                            press, text, reason = self._decide(kind, fn)
                             perf.add_decision(time.perf_counter() - decide_started, used_ocr)
                             if press:
                                 if not self._press_f():
@@ -231,15 +231,15 @@ class GatherPicker:
                                 press_round = press_round + 1 if not rising else 1
                                 last_press = now
                             elif reason == "no-text" and notext_round < self.NOTEXT_MAX:
-                                
-                                
+
+
                                 prompt_active, rechecking = True, True
                                 decided_press = False
                                 notext_round += 1
                                 last_recheck = now
                             else:
                                 prompt_active, rechecking = True, False
-                                decided_press = False        
+                                decided_press = False
                                 if not skip_logged:
                                     skip_logged = True
                                     if reason.startswith("skip"):
