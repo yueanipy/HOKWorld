@@ -26,21 +26,21 @@ def _res(*parts) -> Path:
 TPL = _res("templates", "raw")
 
 
-ROI_TR = (0.78, 0.0, 1.0, 0.085)        
-ROI_CONFIRM = (0.40, 0.58, 0.80, 0.84)  
-ROI_DLG_TITLE = (0.30, 0.26, 0.70, 0.46)  
-ROI_OPT_TEXT = (0.63, 0.34, 0.98, 0.80) 
-                                        
+ROI_TR = (0.78, 0.0, 1.0, 0.085)
+ROI_CONFIRM = (0.40, 0.58, 0.80, 0.84)
+ROI_DLG_TITLE = (0.30, 0.26, 0.70, 0.46)
+ROI_OPT_TEXT = (0.63, 0.34, 0.98, 0.80)
 
 
 
 
 
 
-REGION_TR = (0.77, 0.0, 1.0, 0.10)            
-REGION_CONFIRM = (0.39, 0.57, 0.81, 0.85)     
-REGION_DLG_TITLE = (0.29, 0.25, 0.71, 0.47)   
-REGION_OPT = (0.62, 0.33, 0.99, 0.81)         
+
+REGION_TR = (0.77, 0.0, 1.0, 0.10)
+REGION_CONFIRM = (0.39, 0.57, 0.81, 0.85)
+REGION_DLG_TITLE = (0.29, 0.25, 0.71, 0.47)
+REGION_OPT = (0.62, 0.33, 0.99, 0.81)
 
 
 
@@ -48,17 +48,17 @@ REGION_OPT = (0.62, 0.33, 0.99, 0.81)
 SCALES = (0.95, 1.0, 1.05)
 
 
-GATE_LO = 0.60      
-                    
-                    
-TH_ESC = 0.90       
-                    
-                    
-TH_CONFIRM = 0.75   
-MIN_CONF = 0.45     
-MIN_OPT_LEN = 2     
+GATE_LO = 0.60
 
-EXIT_WORDS = ("再见", "退出", "离开", "结束对话")  
+
+TH_ESC = 0.90
+
+
+TH_CONFIRM = 0.75
+MIN_CONF = 0.45
+MIN_OPT_LEN = 2
+
+EXIT_WORDS = ("再见", "退出", "离开", "结束对话")
 BAR_SIGNATURE_SIZE = (64, 20)
 
 
@@ -68,7 +68,7 @@ class StoryRecognizer:
     def __init__(self) -> None:
         self.bank = TemplateBank(TPL)
         reg = {
-            "kc_f9": ("kc_f9.png", ROI_TR, GATE_LO),   
+            "kc_f9": ("kc_f9.png", ROI_TR, GATE_LO),
             "kc_esc": ("kc_esc.png", ROI_TR, TH_ESC),
             "confirm_skip": ("confirm_skip.png", ROI_CONFIRM, TH_CONFIRM),
         }
@@ -77,7 +77,7 @@ class StoryRecognizer:
             for n, (f, roi, th) in reg.items():
                 self.bank.register(n, f, roi, th, pre="gray", scales=SCALES)
 
-    
+
     def _score(self, name: str, f_norm: np.ndarray) -> float:
         return self.bank.score(name, f_norm, normalized=True)
 
@@ -104,7 +104,7 @@ class StoryRecognizer:
                 best = (float(mx), float(cx), float(cy))
         return best
 
-    
+
     def _right_lines(self, f_norm: np.ndarray):
         '[(text, cxnorm, cynorm), ...] 按 y 从上到下。'
         h, w = f_norm.shape[:2]
@@ -144,11 +144,11 @@ class StoryRecognizer:
             cs, cx, cy = self._locate("confirm_skip", f)
             if cs >= TH_CONFIRM:
                 return ("confirm", (cx, cy))
-        
-        
-        
-        
-        
+
+
+
+
+
         f9 = self.bank._t["kc_f9"]
         esc = self.bank._t["kc_esc"]
         tr_f9 = preprocess_crop(f, f9.roi, f9.pre)
@@ -180,9 +180,9 @@ class StoryRecognizer:
         txt = "".join(parts)
         if "跳过" in txt and "不可" not in txt:
             return "skip"
-        
-        
-        
+
+
+
         if ("抓拍" in txt) or ("不可" in txt and "跳过" in txt):
             return "story"
         return "none"
@@ -239,7 +239,7 @@ class StoryRecognizer:
         _, lx, ly = lines[0]
         return ("choice", (lx, ly))
 
-    
+
     def scores(self, frame: np.ndarray) -> dict:
         if not self.ready:
             return {}
