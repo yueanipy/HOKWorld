@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -19,14 +20,165 @@ from daily import recognizer as rec
 
 ASSET_DIR = resource_path("assets", "world_map")
 SPECIAL_TARGETS_FILE = "special_targets_v1.json"
+MAP_MATCH_LOCK = threading.RLock()
+
+
+def _fit_similarity_least_squares(
+        source: np.ndarray, target: np.ndarray) -> np.ndarray | None:
+    '用确定性最小二乘拟合二维相似变换。'
+    source_center = np.mean(source, axis=0)
+    target_center = np.mean(target, axis=0)
+    centered_source = source - source_center
+    centered_target = target - target_center
+    denominator = float(np.sum(centered_source * centered_source))
+    if denominator <= 1e-9:
+        return None
+    a = float(np.sum(
+        centered_source[:, 0] * centered_target[:, 0]
+        + centered_source[:, 1] * centered_target[:, 1]) / denominator)
+    b = float(np.sum(
+        centered_source[:, 0] * centered_target[:, 1]
+        - centered_source[:, 1] * centered_target[:, 0]) / denominator)
+    tx = float(target_center[0] - (
+        a * source_center[0] - b * source_center[1]))
+    ty = float(target_center[1] - (
+        b * source_center[0] + a * source_center[1]))
+    return np.float64([[a, -b, tx], [b, a, ty]])
+
+
+def _similarity_candidate_indices(
+        source: np.ndarray, target: np.ndarray, quality: np.ndarray,
+        maximum: int) -> np.ndarray:
+    '选取质量优先且覆盖画面的有限对应点。'
+    order = np.lexsort((
+        target[:, 1], target[:, 0], source[:, 1], source[:, 0], quality))
+    if len(order) <= maximum:
+        return order
+
+    quality_count = min(maximum, max(12, maximum * 5 // 8))
+    selected = list(order[:quality_count])
+    pool = list(order[quality_count:min(len(order), maximum * 4)])
+    while pool and len(selected) < maximum:
+        selected_points = source[np.asarray(selected, np.int32)]
+        pool_points = source[np.asarray(pool, np.int32)]
+        distances = np.min(np.sum(
+            (pool_points[:, None, :] - selected_points[None, :, :]) ** 2,
+            axis=2), axis=1)
+
+        position = int(np.argmax(distances))
+        selected.append(pool.pop(position))
+    return np.asarray(selected, np.int32)
+
+
+def estimate_similarity_transform(
+        source_points: np.ndarray, target_points: np.ndarray, *,
+        quality: np.ndarray | None = None,
+        reprojection_threshold: float,
+        min_scale: float = 0.0,
+        max_scale: float = float("inf"),
+        max_rotation_deg: float = 180.0,
+        max_candidates: int = 32,
+        ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    '从有限点对中确定性求解二维相似变换和内点。'
+    source = np.asarray(source_points, np.float64)
+    target = np.asarray(target_points, np.float64)
+    if (source.ndim != 2 or target.ndim != 2
+            or source.shape != target.shape or source.shape[1:] != (2,)
+            or len(source) < 2 or not np.isfinite(source).all()
+            or not np.isfinite(target).all()):
+        return None, None
+    if quality is None:
+        quality_values = np.zeros(len(source), np.float64)
+    else:
+        quality_values = np.asarray(quality, np.float64).reshape(-1)
+        if len(quality_values) != len(source) or not np.isfinite(quality_values).all():
+            return None, None
+
+    threshold = max(0.1, float(reprojection_threshold))
+    candidate_indices = _similarity_candidate_indices(
+        source, target, quality_values, max(2, int(max_candidates)))
+    best: tuple[tuple[float, ...], np.ndarray, np.ndarray] | None = None
+
+    def evaluate(matrix: np.ndarray) -> tuple[tuple[float, ...], np.ndarray] | None:
+        scale = float(np.hypot(matrix[0, 0], matrix[1, 0]))
+        rotation = abs(float(np.degrees(np.arctan2(
+            matrix[1, 0], matrix[0, 0]))))
+        if not min_scale <= scale <= max_scale or rotation > max_rotation_deg:
+            return None
+        predicted = source @ matrix[:, :2].T + matrix[:, 2]
+        errors = np.linalg.norm(predicted - target, axis=1)
+        inlier_mask = errors <= threshold
+        inliers = int(np.count_nonzero(inlier_mask))
+        if inliers < 2:
+            return None
+        selected_source = source[inlier_mask]
+        spread = float(np.sum(np.var(selected_source, axis=0)))
+        selected_errors = errors[inlier_mask]
+        robust_cost = float(np.mean(np.minimum(
+            (errors / threshold) ** 2, 1.0)))
+        score = (
+            float(inliers),
+            spread,
+            -float(np.median(selected_errors)),
+            -robust_cost,
+            -float(np.mean(quality_values[inlier_mask])),
+        )
+        return score, inlier_mask
+
+    for left_position in range(len(candidate_indices) - 1):
+        left = int(candidate_indices[left_position])
+        for right_position in range(left_position + 1, len(candidate_indices)):
+            right = int(candidate_indices[right_position])
+            source_delta = source[right] - source[left]
+            target_delta = target[right] - target[left]
+            denominator = float(source_delta @ source_delta)
+            if denominator < 16.0 or float(target_delta @ target_delta) < 16.0:
+                continue
+            a = float(source_delta @ target_delta / denominator)
+            b = float((
+                source_delta[0] * target_delta[1]
+                - source_delta[1] * target_delta[0]) / denominator)
+            matrix = np.float64([
+                [a, -b, target[left, 0] - (
+                    a * source[left, 0] - b * source[left, 1])],
+                [b, a, target[left, 1] - (
+                    b * source[left, 0] + a * source[left, 1])],
+            ])
+            result = evaluate(matrix)
+            if result is None:
+                continue
+            score, inlier_mask = result
+            if best is None or score > best[0]:
+                best = score, matrix, inlier_mask
+
+    if best is None:
+        return None, None
+
+    best_score, best_matrix, best_mask = best
+    current_mask = best_mask
+    for _ in range(4):
+        refined = _fit_similarity_least_squares(
+            source[current_mask], target[current_mask])
+        if refined is None:
+            break
+        result = evaluate(refined)
+        if result is None:
+            break
+        score, refined_mask = result
+        if score > best_score:
+            best_score, best_matrix, best_mask = score, refined, refined_mask
+        if np.array_equal(refined_mask, current_mask):
+            break
+        current_mask = refined_mask
+    return best_matrix, best_mask
 
 
 class MapTargetKind(str, Enum):
     NORMAL = "normal"
-    
+
     REGIONAL = "regional"
     CHALLENGE = "challenge"
-    
+
     POI = "poi"
     DESTINATION = "destination"
 
@@ -84,12 +236,14 @@ class TargetObservation:
 class WorldMapAtlas:
     '按需加载地上地图的SIFT特征图谱。'
 
+    _shared_resources: dict[Path, dict[str, object]] = {}
+
     def __init__(self, asset_dir: Path | str = ASSET_DIR) -> None:
         self.asset_dir = Path(asset_dir)
         self._loaded = False
         self._points: np.ndarray | None = None
         self._descriptors: np.ndarray | None = None
-        self._matcher = None
+        self._index = None
         self._source_to_atlas: np.ndarray | None = None
         self._sift = cv2.SIFT_create(nfeatures=6000, contrastThreshold=0.025)
         self.map_roi = (0.08, 0.10, 0.85, 0.84)
@@ -98,6 +252,32 @@ class WorldMapAtlas:
     def _load(self) -> None:
         if self._loaded:
             return
+        cache_key = self.asset_dir.resolve()
+        with MAP_MATCH_LOCK:
+            if self._loaded:
+                return
+            resources = self._shared_resources.get(cache_key)
+            if resources is not None:
+                self._points = resources["points"]
+                self._descriptors = resources["descriptors"]
+                self._index = resources["index"]
+                self._source_to_atlas = resources["source_to_atlas"]
+                self.map_roi = resources["map_roi"]
+                self.targets = resources["targets"]
+                self._loaded = True
+                return
+            self._load_from_disk()
+            self._shared_resources[cache_key] = {
+                "points": self._points,
+                "descriptors": self._descriptors,
+                "index": self._index,
+                "source_to_atlas": self._source_to_atlas,
+                "map_roi": self.map_roi,
+                "targets": self.targets,
+            }
+
+    def _load_from_disk(self) -> None:
+        '在公共锁内加载图谱并构建唯一的FLANN索引。'
         atlas_path = self.asset_dir / "atlas_v1.npz"
         targets_path = self.asset_dir / "targets_v1.json"
         metadata_path = self.asset_dir / "metadata_v1.json"
@@ -105,7 +285,7 @@ class WorldMapAtlas:
             raise FileNotFoundError(f"世界地图图谱资产不完整: {self.asset_dir}")
         atlas = np.load(atlas_path, allow_pickle=False)
         self._points = np.asarray(atlas["points"], np.float32)
-        
+
         self._descriptors = np.asarray(atlas["descriptors"], np.float32)
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         self.map_roi = tuple(float(value) for value in metadata["map_roi"])
@@ -132,10 +312,8 @@ class WorldMapAtlas:
             )
             for item in raw_targets
         }
-        self._matcher = cv2.FlannBasedMatcher(
-            {"algorithm": 1, "trees": 8}, {"checks": 96})
-        self._matcher.add([self._descriptors])
-        self._matcher.train()
+        self._index = cv2.flann_Index(
+            self._descriptors, {"algorithm": 1, "trees": 8})
         self._loaded = True
         dev_log(
             f"[world map] 图谱已加载 features={len(self._points)} "
@@ -146,31 +324,41 @@ class WorldMapAtlas:
             checks: int | None = None,
             ) -> tuple[tuple[int, tuple[float, float], float], ...]:
         '把局部地图特征匹配到公共图谱坐标。'
-        self._load()
         if descriptors is None or len(descriptors) < 2:
             return ()
-        if checks is not None:
-            matcher = cv2.FlannBasedMatcher(
-                dict(algorithm=1, trees=5), dict(checks=max(8, int(checks))))
-            pairs = matcher.knnMatch(
-                np.asarray(descriptors, np.float32), self._descriptors, k=2)
-        else:
-            matcher = self._matcher
-            pairs = matcher.knnMatch(np.asarray(descriptors, np.float32), k=2)
+        with MAP_MATCH_LOCK:
+            self._load()
+
+            search_checks = 96 if checks is None else max(8, int(checks))
+            indices, squared_distances = self._index.knnSearch(
+                np.asarray(descriptors, np.float32), 4,
+                params={"checks": search_checks})
         limit = float(np.clip(ratio, 0.45, 0.90))
         matches: list[tuple[int, tuple[float, float], float]] = []
-        for pair in pairs:
-            if len(pair) < 2:
+        for query_index, (candidate_indices, candidate_distances) in enumerate(
+                zip(indices, squared_distances)):
+            candidates = sorted((
+                (float(distance), int(train_index))
+                for train_index, distance in zip(
+                    candidate_indices, candidate_distances)
+                if int(train_index) >= 0 and np.isfinite(distance)
+            ), key=lambda item: (item[0], item[1]))
+            if len(candidates) < 2:
                 continue
-            first, second = pair
-            if first.distance >= limit * second.distance:
+            first_squared, first_index = candidates[0]
+            second_squared, _ = candidates[1]
+            first_distance = float(np.sqrt(max(0.0, first_squared)))
+            second_distance = float(np.sqrt(max(0.0, second_squared)))
+            if first_distance >= limit * second_distance:
                 continue
-            atlas_point = self._points[first.trainIdx]
+            atlas_point = self._points[first_index]
             matches.append((
-                int(first.queryIdx),
+                int(query_index),
                 (float(atlas_point[0]), float(atlas_point[1])),
-                float(first.distance),
+                first_distance,
             ))
+        matches.sort(key=lambda item: (
+            item[0], item[2], item[1][0], item[1][1]))
         return tuple(matches)
 
     def target(self, name: str) -> MapTarget:
@@ -181,6 +369,18 @@ class WorldMapAtlas:
             suggestions = [known for known in self.targets if name in known or known in name][:5]
             suffix = f"，相近名称: {suggestions}" if suggestions else ""
             raise KeyError(f"未注册地上世界传送目标 {name!r}{suffix}") from exc
+
+    def list_targets(
+            self, kinds: tuple[MapTargetKind, ...] | None = None,
+            ) -> tuple[MapTarget, ...]:
+        '返回按区域和名称排序的已注册地上地图目标。'
+        self._load()
+        allowed = set(kinds) if kinds is not None else None
+        values = (
+            target for target in self.targets.values()
+            if allowed is None or target.kind in allowed
+        )
+        return tuple(sorted(values, key=lambda item: (item.region, item.name)))
 
     def destination(self, name: str, source: tuple[float, float], region: str = "") -> MapTarget:
         '为后续寻路或战斗任务创建不可点击的地图目的地。'
@@ -272,50 +472,62 @@ class WorldMapAtlas:
             [keypoint.pt[0] + px0, keypoint.pt[1] + py0]
             for keypoint in keypoints
         ])
-        pairs = self._matcher.knnMatch(np.asarray(descriptors, np.float32), k=2)
-        good = [first for first, second in pairs if first.distance < 0.68 * second.distance]
-        if len(good) < 24:
-            dev_log(f"[world map] 定位匹配不足 good={len(good)}")
-            return None
-        source = np.float32([query_points[match.queryIdx] for match in good])
-        target = np.float32([self._points[match.trainIdx] for match in good])
-        affine, mask = cv2.estimateAffinePartial2D(
-            source, target, method=cv2.RANSAC, ransacReprojThreshold=8.0,
-            maxIters=10000, confidence=0.999, refineIters=30)
-        if affine is None or mask is None:
-            return None
-        inlier_mask = mask.ravel().astype(bool)
-        inliers = int(inlier_mask.sum())
-        ratio = inliers / max(1, len(good))
-        scale = float(np.hypot(affine[0, 0], affine[0, 1]))
-        rotation = float(np.degrees(np.arctan2(affine[1, 0], affine[0, 0])))
-        predicted = cv2.transform(source.reshape(-1, 1, 2), affine).reshape(-1, 2)
-        errors = np.linalg.norm(predicted - target, axis=1)
-        median_error = float(np.median(errors[inlier_mask])) if inliers else float("inf")
-        
-        
-        
-        if (inliers < 18 or ratio < 0.30 or not 0.30 <= scale <= 6.00 or
-                abs(rotation) > 3.0 or median_error > 7.0):
+        last_failure: tuple[int, int, float, float, float, float] | None = None
+        for checks in (96, 384):
+            matches = self.match_feature_descriptors(
+                descriptors, ratio=0.68, checks=checks)
+            if len(matches) < 24:
+                last_failure = len(matches), 0, 0.0, 0.0, 0.0, float("inf")
+                continue
+            source = np.float64([
+                query_points[query_index] for query_index, _, _ in matches])
+            target = np.float64([point for _, point, _ in matches])
+            quality = np.float64([distance for _, _, distance in matches])
+            affine, inlier_mask = estimate_similarity_transform(
+                source, target, quality=quality, reprojection_threshold=7.0,
+                min_scale=0.30, max_scale=6.00, max_rotation_deg=3.0)
+            if affine is None or inlier_mask is None:
+                last_failure = len(matches), 0, 0.0, 0.0, 0.0, float("inf")
+                continue
+            inliers = int(inlier_mask.sum())
+            ratio = inliers / max(1, len(matches))
+            scale = float(np.hypot(affine[0, 0], affine[0, 1]))
+            rotation = float(np.degrees(np.arctan2(
+                affine[1, 0], affine[0, 0])))
+            predicted = cv2.transform(
+                source.reshape(-1, 1, 2), affine).reshape(-1, 2)
+            errors = np.linalg.norm(predicted - target, axis=1)
+            median_error = float(np.median(
+                errors[inlier_mask])) if inliers else float("inf")
+
+
+
+            if (inliers < 18 or ratio < 0.30 or not 0.30 <= scale <= 6.00 or
+                    abs(rotation) > 3.0 or median_error > 7.0):
+                last_failure = (
+                    len(matches), inliers, ratio, scale, rotation, median_error)
+                continue
+            confidence = float(np.clip(
+                0.45 * min(1.0, inliers / 80.0) +
+                0.35 * min(1.0, ratio / 0.65) +
+                0.20 * max(0.0, 1.0 - median_error / 8.0), 0.0, 1.0))
+            return MapLocation(
+                screen_to_atlas=affine.astype(np.float64),
+                matches=len(matches),
+                inliers=inliers,
+                inlier_ratio=ratio,
+                scale=scale,
+                rotation_deg=rotation,
+                median_error_px=median_error,
+                confidence=confidence,
+            )
+        if last_failure is not None:
+            good, inliers, ratio, scale, rotation, error = last_failure
             dev_log(
-                f"[world map] 定位门未通过 good={len(good)} inliers={inliers} "
+                f"[world map] 定位门未通过 good={good} inliers={inliers} "
                 f"ratio={ratio:.3f} scale={scale:.3f} rotation={rotation:.2f} "
-                f"error={median_error:.2f}")
-            return None
-        confidence = float(np.clip(
-            0.45 * min(1.0, inliers / 80.0) +
-            0.35 * min(1.0, ratio / 0.65) +
-            0.20 * max(0.0, 1.0 - median_error / 8.0), 0.0, 1.0))
-        return MapLocation(
-            screen_to_atlas=affine.astype(np.float64),
-            matches=len(good),
-            inliers=inliers,
-            inlier_ratio=ratio,
-            scale=scale,
-            rotation_deg=rotation,
-            median_error_px=median_error,
-            confidence=confidence,
-        )
+                f"error={error:.2f}")
+        return None
 
     @staticmethod
     def _screen_point(location: MapLocation, target: MapTarget,
@@ -355,8 +567,8 @@ class WorldMapAtlas:
         if target.kind is MapTargetKind.DESTINATION:
             return MapTargetStatus.UNKNOWN, point
         if target.kind is MapTargetKind.POI:
-            
-            
+
+
             if target.category == "青色传送地点列表":
                 candidates = rec.find_map_teleport_icons(
                     image, point, max_distance=0.04, min_distance=0.0,
@@ -376,10 +588,10 @@ class WorldMapAtlas:
         hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
 
         if target.kind in stone_kinds:
-            
-            
-            
-            
+
+
+
+
             local_radius = 24
             lx0, lx1 = max(0, radius - local_radius), min(patch.shape[1], radius + local_radius + 1)
             ly0, ly1 = max(0, radius - local_radius), min(patch.shape[0], radius + local_radius + 1)
@@ -405,18 +617,18 @@ class WorldMapAtlas:
                 px = (x0 + float(centers[index][0])) / w
                 py = (y0 + float(centers[index][1])) / h
                 distance = float(np.hypot((px - point[0]) * w, (py - point[1]) * h))
-                
-                
-                
-                
-                
+
+
+
+
+
                 if distance <= 30.0:
                     candidates.append((distance, px, py, area))
             if candidates:
                 _, px, py, _ = min(candidates)
                 return MapTargetStatus.AVAILABLE, (px, py)
-            
-            
+
+
             neutral = cv2.inRange(hsv, np.array([0, 0, 100], np.uint8),
                                   np.array([179, 65, 230], np.uint8))
             edges = cv2.Canny(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY), 65, 145)
@@ -433,14 +645,14 @@ class WorldMapAtlas:
         usable_pixels = cv2.countNonZero(gold) + cv2.countNonZero(silver)
         activity_pixels = cv2.countNonZero(colored)
         if usable_pixels >= 120 and activity_pixels <= usable_pixels * 1.8:
-            
-            
-            
+
+
+
             gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
             center = gray[radius // 2:radius + radius // 2,
                           radius // 2:radius + radius // 2]
-            
-            
+
+
             if center.size and np.count_nonzero(center > 235) > 140:
                 return MapTargetStatus.UNAVAILABLE, point
             return MapTargetStatus.AVAILABLE, point
@@ -451,8 +663,8 @@ class WorldMapNavigator:
     '执行地图内闭环移动，不执行角色移动或战斗。'
 
     CENTER = (0.50, 0.48)
-    
-    
+
+
     SAFE_ROI = (0.22, 0.24, 0.78, 0.76)
     TARGET_UI_ROI = (0.58, 0.10, 0.99, 0.90)
     TARGET_ACTION_ROI = (0.70, 0.58, 0.98, 0.86)
@@ -473,9 +685,9 @@ class WorldMapNavigator:
     SCALE_TRANSITION_RETRIES = 3
     POI_CENTER_TOLERANCE = (0.025, 0.035)
     HIGH_LOCATION_CONFIDENCE = 0.90
-    
-    
-    
+
+
+
     DRAG_LOCATION_CONFIDENCE_FLOOR = 0.70
     DRAG_LOCATION_POINT_DRIFT = 0.015
     DRAG_LOCATION_SCALE_DRIFT = 0.020
@@ -492,8 +704,8 @@ class WorldMapNavigator:
         self.ctx = ctx
         self.atlas = atlas or WorldMapAtlas()
         self.name = name
-        
-        
+
+
         self._layer: str | None = None
 
     def _wait_map_stable(self, timeout: float) -> bool:
@@ -515,16 +727,16 @@ class WorldMapNavigator:
     def open(self, timeout: float = 5.0) -> bool:
         frame = self.ctx.grab()
         if frame is not None and rec.in_world_map(frame):
-            
-            
+
+
             stable = self._wait_map_stable(min(timeout, 2.4))
             if stable:
                 self._layer = None
             return stable
 
-        
-        
-        
+
+
+
         for attempt in range(2):
             if attempt:
                 frame = self.ctx.grab()
@@ -542,7 +754,7 @@ class WorldMapNavigator:
             if not self.ctx.press("m"):
                 return False
             if self._wait_map_stable(timeout if attempt == 0 else min(timeout, 3.0)):
-                
+
                 self._layer = None
                 return True
 
@@ -550,9 +762,9 @@ class WorldMapNavigator:
         return False
 
     def _locate_with_recovery(self) -> tuple[np.ndarray, MapLocation] | None:
-        
-        
-        
+
+
+
         for attempt in range(3):
             frame = self.ctx.grab()
             location = self.atlas.locate(frame)
@@ -633,9 +845,9 @@ class WorldMapNavigator:
             if scrolls >= scroll_budget:
                 break
 
-            
-            
-            
+
+
+
             direction = 1 if scale > expected else -1
             batch = (2 if error >= self.FAST_SCROLL_ERROR and
                      scroll_budget - scrolls >= 2 else 1)
@@ -728,14 +940,14 @@ class WorldMapNavigator:
     def center_target(self, name: str | MapTarget, max_drags: int = 9, *,
                       layer_ready: bool = False) -> TargetObservation | None:
         target = self.atlas.resolve(name)
-        
-        
+
+
         if not layer_ready and not self._ensure_target_layer(target):
             return None
         drag_budget = max(1, max(max_drags, 24)
                           if target.kind is MapTargetKind.POI else max_drags)
-        
-        
+
+
         max_checks = drag_budget + self.MAX_TRANSIENT_LOCATION_CHECKS + 1
         check_count = 0
         drag_count = 0
@@ -810,8 +1022,8 @@ class WorldMapNavigator:
             recovery_index += 1
             return value
 
-        
-        
+
+
         while check_count < max_checks:
             check_count += 1
             located = self._locate_with_recovery()
@@ -903,8 +1115,8 @@ class WorldMapNavigator:
                 close_y = abs(point[1] - self.CENTER[1]) <= self.POI_CENTER_TOLERANCE[1]
                 if close_x and close_y:
                     if movement_only:
-                        
-                        
+
+
                         if last_drag_delta is not None:
                             direction = np.array(
                                 [-last_drag_delta[1], last_drag_delta[0]], np.float64)
@@ -982,8 +1194,8 @@ class WorldMapNavigator:
     @classmethod
     def _line_matches_target(cls, text: str, target: MapTarget) -> bool:
         if target.category == "青色传送地点列表":
-            
-            
+
+
             return text == target.name
         return (text == target.name or target.name in text or
                 cls._one_edit_match(text, target.name))
@@ -1039,8 +1251,8 @@ class WorldMapNavigator:
                 return True
             if (state["matches"] and not state["action"] and
                     not state["detail_panel"]):
-                
-                
+
+
                 candidate = max(state["matches"], key=lambda line: line[1])
                 point = (candidate[1], candidate[2])
                 if (list_candidate is not None and
@@ -1055,7 +1267,7 @@ class WorldMapNavigator:
                         return False
                     self.ctx.log(f"{self.name}:重叠点列表选择 {target.name}")
                     self.ctx.sleep(0.28)
-                    
+
                     break
             self.ctx.sleep(0.18)
 
