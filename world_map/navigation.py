@@ -222,8 +222,8 @@ class CoordinateNavigationController:
                     turn_px, steps=max(4, min(16, abs(turn_px) // 28))):
                 return HeadingAlignmentResult(
                     False, "camera_turn_failed", target, pose, error, tuple(steps))
-            
-            
+
+
             if not self.ctx.press("w", hold_s=max(0.10, calibration_step_s)):
                 return HeadingAlignmentResult(
                     False, "heading_probe_input_failed", target, pose,
@@ -314,8 +314,8 @@ class CoordinateNavigationController:
 
             turn_px = self._turn_pixels(vector.turn_deg)
             walk_s = self._walk_duration(vector.distance)
-            
-            
+
+
             if index == 1:
                 walk_s = max(walk_s, self.config.departure_walk_s)
             progress = (
@@ -349,7 +349,7 @@ class CoordinateNavigationController:
                 return CoordinateNavigationResult(
                     False, "camera_turn_failed", target, pose,
                     vector.distance, tuple(steps))
-            
+
             if not self.ctx.press("w", hold_s=walk_s):
                 return CoordinateNavigationResult(
                     False, "walk_input_failed", target, pose,
@@ -372,8 +372,8 @@ class CoordinateNavigationController:
                 abs(next_vector.turn_deg)
                 <= max(25.0, self.config.heading_tolerance_deg * 2.0))
             if not next_aligned:
-                
-                
+
+
                 stalled = 0
             elif actual_progress < self.config.minimum_progress:
                 stalled += 1
