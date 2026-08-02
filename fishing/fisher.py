@@ -11,33 +11,45 @@ import cv2
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))  
+sys.path.insert(0, str(HERE.parent))
 
 from capture import GameCapture  # noqa: E402
 from winenv import find_game_hwnd, is_foreground  # noqa: E402
 from fishing.matcher import CLICK_POINT, FishingRecognizer  # noqa: E402
-from runtime_guard import dev_log, release_known_keys, safe_click_norm, safe_press_key  # noqa: E402
-from paths import is_dev, sessions_dir  # noqa: E402
+from runtime_guard import (  # noqa: E402
+    dev_log,
+    release_known_keys,
+    safe_click_norm,
+    safe_move_mouse_relative,
+    safe_press_key,
+)
 
 
 _CAST_REASON = {
     "too_close": "落点过近", "too_far": "超出落杆范围",
     "not_water": "落点不在水面", "shallow": "水域深度不足",
     "bait_wrong": "当前鱼饵不适用", "bait_empty": "需要装备鱼饵",
+    "invalid_position": "当前位置无法钓鱼",
 }
 
 
 class FishingBot:
+    MAX_CAST_CAMERA_ADJUSTMENTS = 10
+    INITIAL_CAST_CAMERA_STEP_PX = 95
+    MIN_CAST_CAMERA_STEP_PX = 30
+
     def __init__(self, log=print, on_count=lambda n: None, debug=True) -> None:
         self.rec = FishingRecognizer()
         self.log = log
         self.on_count = on_count
         self.stop_flag = False
         self.caught = 0
-        self.debug = bool(debug) and is_dev()  
+        self.debug = bool(debug) and is_dev()
         self._dbgdir = None
-        self._last_qdbg = 0.0       
-        self.cast_pt = list(CLICK_POINT)  
+        self._last_qdbg = 0.0
+        self.cast_pt = list(CLICK_POINT)
+        self._cast_camera_step = self.INITIAL_CAST_CAMERA_STEP_PX
+        self._last_cast_error: str | None = None
         self._hwnd = None
         self._pause_cond = threading.Condition()
         self._paused = False
@@ -116,12 +128,12 @@ class FishingBot:
 
     _VK = {"1": 0x31, "4": 0x34, "A": 0x41, "D": 0x44, "W": 0x57, "S": 0x53, "F": 0x46}
 
-    
-    
-    TAP_DOWN_S = 0.012                
-    TAP_GAP = (0.006, 0.022)          
-    
-    
+
+
+    TAP_DOWN_S = 0.012
+    TAP_GAP = (0.006, 0.022)
+
+
     DISC_PRESS_DELAY = (0.30, 0.95)
 
     def _press_key(self, k: str) -> None:
@@ -149,24 +161,24 @@ class FishingBot:
     def _foreground(self) -> bool:
         return bool(self._hwnd and is_foreground(self._hwnd))
 
-    
-    
-    
-    
+
+
+
+
     HOOK_FAIL_S = 0.5
     HOOK_FIXED_S = 0.14
 
     def _delay_hook(self) -> None:
-        budget = self.HOOK_FAIL_S * 2 / 3 - self.HOOK_FIXED_S    
+        budget = self.HOOK_FAIL_S * 2 / 3 - self.HOOK_FIXED_S
         self._sleep(random.uniform(0.0, max(0.0, min(0.10, budget))))
 
     def _delay_action(self) -> None:
-        self._sleep(random.uniform(0.10, 0.45))   
+        self._sleep(random.uniform(0.10, 0.45))
 
     def _delay_cast(self) -> None:
-        self._sleep(random.uniform(0.5, 3.0))     
+        self._sleep(random.uniform(0.5, 3.0))
 
-    
+
     def _grab(self, sct, hwnd):
         if not self._wait_if_paused():
             return None
@@ -175,6 +187,33 @@ class FishingBot:
     def _click(self, hwnd, pt=None) -> None:
         pt = pt if pt is not None else self.cast_pt
         safe_click_norm(hwnd, pt, self._stopped, self._foreground, self.log, 0.04)
+
+    def _adjust_cast_camera(self, error: str, attempt: int) -> bool:
+        '按落杆提示上下修正镜头，等待画面稳定后再允许重抛。'
+        if error not in ("too_close", "too_far"):
+            return False
+
+        if self._last_cast_error is not None and error != self._last_cast_error:
+            self._cast_camera_step = max(
+                self.MIN_CAST_CAMERA_STEP_PX,
+                round(self._cast_camera_step * 0.65),
+            )
+        self._last_cast_error = error
+
+        dy = -self._cast_camera_step if error == "too_close" else self._cast_camera_step
+        if not safe_move_mouse_relative(
+                0, dy, duration_s=0.14,
+                stop_check=self._stopped,
+                foreground_check=self._foreground,
+                log=self.log):
+            return False
+        self._sleep(0.45)
+        self.log(
+            f"落杆{_CAST_REASON[error]}，镜头"
+            f"{'上移' if error == 'too_close' else '下移'}"
+            f"{self._cast_camera_step}px 后重试"
+            f"({attempt}/{self.MAX_CAST_CAMERA_ADJUSTMENTS})")
+        return True
 
     def _esc(self) -> None:
         safe_press_key(0x1B, self._stopped, self._foreground, self.log, 0.05)
@@ -191,7 +230,7 @@ class FishingBot:
         if cnts:
             c = max(cnts, key=cv2.contourArea)
             m = cv2.moments(c)
-            if m["m00"] > 0.04 * mask.size:           
+            if m["m00"] > 0.04 * mask.size:
                 cx = (m["m10"] / m["m00"]) / w
                 cy = (m["m01"] / m["m00"] + y0) / h
                 return [float(np.clip(cx, 0.32, 0.68)), float(np.clip(cy, 0.34, 0.58))]
@@ -219,7 +258,7 @@ class FishingBot:
         st, sc = self.rec.classify(f)
         return st, f, sc
 
-    
+
     def _save_debug(self, frame, tag, scores=None) -> None:
         if getattr(sys, "frozen", False):
             return
@@ -244,11 +283,11 @@ class FishingBot:
                 last_log = self._clock()
             if st == "FISHING_READY":
                 return True
-            if f is not None and self.rec.is_record_screen(f):   
+            if f is not None and self.rec.is_record_screen(f):
                 self._press_f()
                 self._sleep(0.5)
             self._sleep(0.2)
-        if last and last[0] is not None:  
+        if last and last[0] is not None:
             self._save_debug(last[0], "ready_fail", last[1])
         return False
 
@@ -280,9 +319,9 @@ class FishingBot:
             if self.rec.is_hook(f):
                 self._dbg(f, "hookfire")
                 return "hook"
-            if self._is_black(f):       
+            if self._is_black(f):
                 return "settle"
-            self._sleep(0.03)            
+            self._sleep(0.03)
         return "timeout"
 
     def _resolve_outcome(self, sct, hwnd, timeout=16.0) -> str:
@@ -300,12 +339,12 @@ class FishingBot:
             if f is None:
                 continue
             if n % 3 == 0:
-                self._dbg(f, "outcome")   
+                self._dbg(f, "outcome")
             n += 1
             if not success and self.rec.is_success(f):
                 success = True
                 self.log("✓ 检测到渔获奖励")
-            
+
             if self.rec.is_record_screen(f):
                 self.log("个人新纪录 → 按 F 放入背包")
                 self._press_f()
@@ -424,14 +463,14 @@ class FishingBot:
         self.log("普通鱼饵和浓香拟饵均不可用，停止钓鱼")
         return False
 
-    
+
     def run(self, count: int = 10, exit_after: bool = False,
             startup_delay_s: float = 3.0) -> None:
-        
+
         if self.stop_flag:
             return
         self.caught = 0
-        if count <= 0:           
+        if count <= 0:
             count = 1
         hwnd = find_game_hwnd()
         if not hwnd:
@@ -453,35 +492,39 @@ class FishingBot:
             self.log("已取消")
             return
 
-        pulled = False          
+        pulled = False
         pull_t = 0.0
-        current_ad = None       
-        last_rapid = 0.0        
-        disc_key = None         
-        disc_press_at = 0.0     
-        disc_pressed = False    
-        last_disc_press = 0.0   
-        end_streak = 0          
-        qframe = 0              
+        current_ad = None
+        last_rapid = 0.0
+        disc_key = None
+        disc_press_at = 0.0
+        disc_pressed = False
+        last_disc_press = 0.0
+        end_streak = 0
+        qframe = 0
         last_cast = 0.0
         last_progress = self._clock()
-        IDLE_STOP_S = 60.0      
-        
+        IDLE_STOP_S = 60.0
+
         t_start = self._clock()
-        cast_count = 0          
-        cast_pending = False    
-        cast_t = 0.0            
-        consec_cast_fail = 0    
-        CAST_CONFIRM_S = 4.0    
-        MAX_CAST_FAIL = 5       
-        self.cast_pt = list(CLICK_POINT)  
-        cast_adjust = 0         
-        err_checked = False     
-        bait_switches = 0       
+        cast_count = 0
+        cast_pending = False
+        cast_t = 0.0
+        consec_cast_fail = 0
+        CAST_CONFIRM_S = 4.0
+        MAX_CAST_FAIL = 5
+        self.cast_pt = list(CLICK_POINT)
+        self._cast_camera_step = self.INITIAL_CAST_CAMERA_STEP_PX
+        self._last_cast_error = None
+        cast_adjust = 0
+        err_checked = False
+        next_cast_error_check = 0.0
+        wait_streak = 0
+        adjusted_retry = False
+        bait_switches = 0
         MAX_BAIT_SWITCHES = 4
-        MAX_ADJUST = 3          
-        CAST_DY = 0.06          
-        ERR_CHECK_S = 0.8       
+        MAX_ADJUST = self.MAX_CAST_CAMERA_ADJUSTMENTS
+        ERR_CHECK_S = 0.8
         with GameCapture(hwnd) as sct:
           try:
             while self.caught < count and not self.stop_flag:
@@ -492,7 +535,7 @@ class FishingBot:
                     self._sleep(0.03)
                     continue
 
-                
+
                 if not pulled and self.rec.is_hook(f):
                     self._dbg(f, "hookfire")
                     self._delay_hook()
@@ -506,18 +549,18 @@ class FishingBot:
                     self._sleep(0.25)
                     continue
 
-                
-                
-                
-                
-                
-                
-                
-                
+
+
+
+
+
+
+
+
                 if pulled:
                     qframe += 1
                     bs, _ = self.rec.button_state(f)
-                    
+
                     if bs in ("ready", "wait"):
                         current_ad = None
                         disc_key = None
@@ -536,7 +579,7 @@ class FishingBot:
                         continue
                     end_streak = 0
 
-                    
+
                     if qframe % 6 == 0 and self.rec.is_record_screen(f):
                         current_ad = None
                         disc_key = None
@@ -549,12 +592,12 @@ class FishingBot:
                         continue
 
                     now = self._clock()
-                    
-                    
+
+
                     dk = self.rec.qte_disc(f)
                     if dk:
-                        current_ad = None            
-                        if dk != disc_key:           
+                        current_ad = None
+                        if dk != disc_key:
                             disc_key = dk
                             disc_press_at = now + random.uniform(*self.DISC_PRESS_DELAY)
                             disc_pressed = False
@@ -566,9 +609,9 @@ class FishingBot:
                         last_progress = now
                         self._sleep(0.02)
                         continue
-                    disc_key = None                  
+                    disc_key = None
 
-                    
+
                     qk = self.rec.qte_key(f)
                     if qk:
                         if qk != current_ad:
@@ -583,9 +626,9 @@ class FishingBot:
                             current_ad = None
                             pulled = False
                         continue
-                    current_ad = None                
+                    current_ad = None
 
-                    
+
                     if self.rec.is_success(f):
                         self.caught += 1
                         self.on_count(self.caught)
@@ -600,7 +643,7 @@ class FishingBot:
                     self._sleep(0.03)
                     continue
 
-                
+
                 if self.rec.is_record_screen(f):
                     self._dbg(f, "record")
                     self._delay_action()
@@ -610,13 +653,19 @@ class FishingBot:
                     self._sleep(0.5)
                     continue
 
-                
-                
+
+
                 now = self._clock()
                 bs, _ = self.rec.button_state(f)
                 if (bs != "ready" and cast_pending and not err_checked
-                        and now - cast_t > ERR_CHECK_S):
+                        and now - cast_t > ERR_CHECK_S
+                        and now >= next_cast_error_check):
+                    next_cast_error_check = now + 0.22
                     bait_error = self.rec.cast_error(f)
+                    if bait_error in ("not_water", "shallow", "invalid_position"):
+                        self._save_debug(f, "cast_position_invalid")
+                        self.log(f"落杆失败:{_CAST_REASON[bait_error]}，结束本次并交由每日任务重试")
+                        break
                     if bait_error in ("bait_wrong", "bait_empty"):
                         self._save_debug(f, bait_error)
                         bait_switches += 1
@@ -633,20 +682,26 @@ class FishingBot:
                         last_progress = self._clock()
                         continue
 
-                
+
                 if bs == "ready":
-                    if pulled:                       
+                    wait_streak = 0
+                    if pulled:
                         self.log("✗ 脱钩,未钓到,重抛")
                         pulled = False
                     now = self._clock()
-                    
-                    if cast_pending and not err_checked and now - cast_t > ERR_CHECK_S:
-                        err_checked = True
+
+                    if (cast_pending and not err_checked
+                            and now - cast_t > ERR_CHECK_S
+                            and now >= next_cast_error_check):
+                        next_cast_error_check = now + 0.22
                         if self.rec.is_level_cap(f):
+                            err_checked = True
                             self._save_debug(f, "level_cap")
                             self.log("已达等级上限(脚本不处理),停机")
                             break
                         err = self.rec.cast_error(f)
+                        if err is not None:
+                            err_checked = True
                         if err in ("bait_wrong", "bait_empty"):
                             self._save_debug(f, err)
                             bait_switches += 1
@@ -668,21 +723,19 @@ class FishingBot:
                                 self._save_debug(f, "cast_adjust_fail")
                                 self.log(f"落杆位置调整 {MAX_ADJUST} 次仍失败({_CAST_REASON[err]}),停机")
                                 break
-                            if cast_adjust >= MAX_ADJUST:               
-                                self.cast_pt = self._water_center(f)
-                                self.log(f"落杆{_CAST_REASON[err]} → 重定位水域中央(第{cast_adjust}/{MAX_ADJUST}次)")
-                            else:                                       
-                                dy = -CAST_DY if err == "too_close" else CAST_DY
-                                ny = min(0.70, max(0.30, self.cast_pt[1] + dy))
-                                self.cast_pt = [self.cast_pt[0] * 0.6 + 0.5 * 0.4, ny]
-                                self.log(f"落杆{_CAST_REASON[err]},{'上移' if err == 'too_close' else '下移'}重试(第{cast_adjust}/{MAX_ADJUST}次)")
+                            if not self._adjust_cast_camera(err, cast_adjust):
+                                self.log("落杆镜头调整失败，停止钓鱼")
+                                break
                             cast_pending = False
-                            last_cast = 0.0                              
-                        elif err in ("not_water", "shallow"):
+                            last_cast = 0.0
+                            adjusted_retry = True
+                            consec_cast_fail = 0
+                            last_progress = self._clock()
+                        elif err in ("not_water", "shallow", "invalid_position"):
                             self._save_debug(f, "cast_err")
                             self.log(f"落杆失败:{_CAST_REASON[err]}(脚本不处理),停机")
                             break
-                    
+
                     if cast_pending and now - cast_t > CAST_CONFIRM_S:
                         consec_cast_fail += 1
                         cast_pending = False
@@ -691,13 +744,17 @@ class FishingBot:
                             self._save_debug(f, "cast_fail")
                             self.log("连续多次抛竿无效,疑似缺饵/朝向不对/钓点异常,停机")
                             break
-                    
+
                     if not cast_pending and now - last_cast > 2.0:
-                        self._delay_cast()           
+                        if adjusted_retry:
+
+                            adjusted_retry = False
+                        else:
+                            self._delay_cast()
                         self._click(hwnd)
                         cast_count += 1
                         self.log(f"抛竿(目标 {self.caught + 1}/{count})")
-                        t_now = self._clock()          
+                        t_now = self._clock()
                         last_cast = t_now
                         cast_t = t_now
                         cast_pending = True
@@ -705,14 +762,23 @@ class FishingBot:
                         last_progress = t_now
                     self._sleep(0.15)
                 elif bs == "wait":
-                    if cast_pending:                 
+                    if cast_pending:
+                        wait_streak += 1
+                        if wait_streak < 2:
+                            self._sleep(0.05)
+                            continue
+
                         cast_pending = False
                         consec_cast_fail = 0
                         cast_adjust = 0
+                        self._cast_camera_step = self.INITIAL_CAST_CAMERA_STEP_PX
+                        self._last_cast_error = None
+                    else:
+                        wait_streak = 0
                     last_progress = self._clock()
-                    self._sleep(0.05)                 
-                else:                                
-                    if pulled and self._clock() - pull_t > 12.0:   
+                    self._sleep(0.05)
+                else:
+                    if pulled and self._clock() - pull_t > 12.0:
                         self.log("✗ 脱钩(超时未见渔获),重抛")
                         pulled = False
                     if self._clock() - last_progress > IDLE_STOP_S:
@@ -721,7 +787,7 @@ class FishingBot:
                         break
                     self._sleep(0.1)
           finally:
-            self._release_all()   
+            self._release_all()
         dt = self._clock() - t_start
         mins = dt / 60.0
         rate = (self.caught / mins) if mins > 0 else 0.0
