@@ -267,7 +267,7 @@ class AutoWaterScheduler:
                 results["context"] = TaskResult.FAIL
                 self._audit("每日任务上下文初始化失败")
                 return results
-            
+
             if not ctx.wait_foreground(timeout=None):
                 results["foreground"] = (
                     TaskResult.ABORT if self._stopped() else TaskResult.FAIL)
@@ -282,7 +282,7 @@ class AutoWaterScheduler:
                 if monthly_state == "clicked":
                     self.log("自动浇水：月卡界面已处理，继续田地任务")
             except Exception as exc:
-                
+
                 dev_log("自动浇水:月卡检查异常，已跳过", exc)
                 self.log(f"月卡检查失败，已跳过:{type(exc).__name__}")
             for name, factory in self._task_factories:
@@ -365,8 +365,8 @@ class AutoWaterScheduler:
             self._cycle_index += 1
             self._state(f"第 {self._cycle_index} 轮准备中…")
             self._audit(f"第 {self._cycle_index} 轮开始")
-            
-            
+
+
             results = self._run_cycle_active(stop_deadline=stop_deadline)
             if self._stopped():
                 break
