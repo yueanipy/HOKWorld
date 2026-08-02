@@ -14,7 +14,7 @@ import win32ui
 from winenv import client_rect_on_screen
 from runtime_guard import dev_log
 
-NORM_W = 1920   
+NORM_W = 1920
 GDI_RESOURCE_IDLE_S = 120.0
 GDI_RESOURCE_SWEEP_S = 30.0
 
@@ -97,8 +97,8 @@ class RegionFrame:
         if out_w <= 0 or out_h <= 0:
             return np.empty((0, 0, 3), np.uint8)
 
-        
-        
+
+
         for patch in reversed(self._patches):
             px0, py0, px1, py1 = patch.bounds
             intersects = max(x0, px0) < min(x1, px1) and max(y0, py0) < min(y1, py1)
@@ -148,14 +148,14 @@ class GameCapture:
         self.hwnd = hwnd
         self.mode = "bitblt"
         self._desktop = None
-        self._src_dc = None        
-        self._mfc = None           
-        self._res = {}             
-        self._res_last_used = {}   
+        self._src_dc = None
+        self._mfc = None
+        self._res = {}
+        self._res_last_used = {}
         self._next_res_sweep = 0.0
         self._last: np.ndarray | None = None
-        self._canvas: np.ndarray | None = None   
-        
+        self._canvas: np.ndarray | None = None
+
         self._last_region_metrics = RegionCaptureMetrics()
 
     @property
@@ -182,7 +182,7 @@ class GameCapture:
             return
         old = self.hwnd
         self.hwnd = hwnd
-        
+
         self._last = None
         self._canvas = None
         dev_log(f"capture: 游戏窗口重绑定 {old} -> {hwnd}")
@@ -200,7 +200,7 @@ class GameCapture:
             self._desktop = win32gui.GetDesktopWindow()
             self._src_dc = win32gui.GetWindowDC(self._desktop)
             self._mfc = win32ui.CreateDCFromHandle(self._src_dc)
-        if len(self._res) >= 8:    
+        if len(self._res) >= 8:
             self._free()
             return self._ensure(w, h)
         mem = self._mfc.CreateCompatibleDC()
@@ -247,7 +247,7 @@ class GameCapture:
         with _CAPTURE_LOCK:
             mem, bmp = self._ensure(rw, rh)
             mem.BitBlt((0, 0), (rw, rh), self._mfc, (rx, ry), win32con.SRCCOPY)
-            bits = bmp.GetBitmapBits(True)                     
+            bits = bmp.GetBitmapBits(True)
         return np.frombuffer(bits, np.uint8).reshape(rh, rw, 4)[:, :, :3]
 
     def grab(self) -> np.ndarray | None:
@@ -256,11 +256,11 @@ class GameCapture:
         if w <= 0 or h <= 0:
             return self._last
         try:
-            self._last = np.ascontiguousarray(self._blit(x, y, w, h))   
+            self._last = np.ascontiguousarray(self._blit(x, y, w, h))
             return self._last
         except Exception as exc:
             dev_log("capture: BitBlt 失败,重建 DC", exc)
-            self._free()                                       
+            self._free()
             return self._last
 
     def _grab_region_canvas_at(self, roi, geometry) -> tuple[np.ndarray | None, float, float]:
@@ -338,8 +338,8 @@ class GameCapture:
         geometry = client_rect_on_screen(self.hwnd)
         geometry_ms = 1000.0 * (time.perf_counter() - geometry_started)
 
-        
-        
+
+
         compose_started = time.perf_counter()
         _, _, w, h = geometry
         if w <= 0 or h <= 0:
