@@ -73,8 +73,8 @@ class CaptureBroker:
 
     def __init__(self, hwnd: int) -> None:
         self.hwnd = int(hwnd)
-        
-        
+
+
         self._cadence_epoch = time.monotonic()
         self._condition = threading.Condition()
         self._subscribers: dict[int, _SubscriberState] = {}
@@ -174,17 +174,17 @@ class CaptureBroker:
                 state.requested_at = None
             if state.interval != interval:
                 if interval < state.interval:
-                    
+
                     state.next_due = min(
                         state.next_due, self._next_cadence_due(now, interval))
                 else:
-                    
+
                     state.next_due = self._next_cadence_due(now, interval)
                 state.interval = interval
             if not state.enabled:
                 state.enabled = True
                 state.next_due = now
-                
+
                 state.snapshot = None
                 state.requested_after_sequence = None
                 state.requested_at = None
@@ -192,7 +192,7 @@ class CaptureBroker:
                 snapshot = state.snapshot
                 state.snapshot = None
                 return snapshot
-            
+
             state.requested_after_sequence = after_sequence
             state.requested_at = time.monotonic()
             self._condition.notify_all()
@@ -251,8 +251,8 @@ class CaptureBroker:
         due_subscribers_total = 0
         last_metrics = time.monotonic()
         try:
-            
-            
+
+
             try:
                 import win32api
                 import win32process
@@ -274,13 +274,13 @@ class CaptureBroker:
                         if not enabled:
                             self._condition.wait(0.5)
                             continue
-                        
-                        
+
+
                         earliest_next_due = min(state.next_due for _, state in enabled)
                         if earliest_next_due > now:
-                            
-                            
-                            
+
+
+
                             sleep_s = min(0.05, earliest_next_due - now)
                             self._condition.release()
                             try:
@@ -296,8 +296,8 @@ class CaptureBroker:
                         return
                     raw_rois = tuple(dict.fromkeys(roi for _, state in due for roi in state.rois))
                     rois = self._merge_rois(raw_rois)
-                    
-                    
+
+
                     earliest_due = min(max(state.next_due, state.requested_at or state.next_due)
                                        for _, state in due)
 
@@ -333,8 +333,8 @@ class CaptureBroker:
                         state.snapshot = snapshot
                         state.requested_after_sequence = None
                         state.requested_at = None
-                        
-                        
+
+
                         state.next_due = self._next_cadence_due(
                             captured_at, state.interval)
                     subscriber_count = len(self._subscribers)
