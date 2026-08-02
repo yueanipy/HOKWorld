@@ -15,19 +15,30 @@ class InterestLikeTask(DailyTask):
     POPUP_DISMISS_PT = (0.10, 0.82)
 
     def _dismiss_badge_popup(self) -> bool:
-        '关闭可能挡住点赞按钮的徽章升级层；无弹层时不执行点击。'
+        '关闭可能挡住点赞按钮的浮层；优先点击下半部识别到的「关闭」。'
         ctx = self.ctx
         for _ in range(2):
             frame = ctx.grab()
             if frame is None:
                 return False
-            if not rec.interest_badge_popup(frame):
+            close_pt = rec.find_interest_popup_close(frame)
+            badge_popup = rec.interest_badge_popup(frame)
+            if close_pt is None and not badge_popup:
                 return True
-            ctx.log("兴趣圈:检测到徽章升级奖励弹层，点击中央区域外空白关闭")
-            if not ctx.click(self.POPUP_DISMISS_PT):
+            if close_pt is not None:
+                ctx.log(
+                    f"兴趣圈:识别到浮层“关闭”({close_pt[0]:.3f},{close_pt[1]:.3f})，点击关闭")
+                dismiss_pt = close_pt
+            else:
+                ctx.log("兴趣圈:检测到徽章升级奖励弹层，点击中央区域外空白关闭")
+                dismiss_pt = self.POPUP_DISMISS_PT
+            if not ctx.click(dismiss_pt):
                 return False
             if ctx.wait_until(
-                    lambda current: not rec.interest_badge_popup(current),
+                    lambda current: (
+                        rec.find_interest_popup_close(current) is None
+                        and not rec.interest_badge_popup(current)
+                    ),
                     timeout=3.0, interval=0.20, desc="关闭兴趣圈徽章奖励弹层"):
                 return True
         return False
@@ -51,23 +62,23 @@ class InterestLikeTask(DailyTask):
                 return False
             dev_log(
                 f"[interest] double like click index={click_index}/2")
-            ctx.sleep(0.30 if click_index == 1 else 0.25)
+            ctx.sleep(0.50 if click_index == 1 else 0.25)
         ctx.log("兴趣圈:已在点赞页面对第一个赞点击两次")
         return True
 
     def run(self) -> str:
         ctx = self.ctx
-        
+
         if not open_playbook(ctx):
             frame = ctx.grab()
             if frame is not None and rec.playbook_daily_done(frame):
                 ctx.log("兴趣圈:朝闻道今日已完成,无需再点赞;保持当前界面")
                 return TaskResult.SUCCESS
             return TaskResult.FAIL
-        
+
         if not ctx.click(R.PT_SUBTAB_SOCIAL):
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-        
+
         ctx.sleep(0.60)
         entry = None
         for attempt in range(5):
@@ -140,7 +151,7 @@ class InterestLikeTask(DailyTask):
             nav.back_to_world(ctx)
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
 
-        
+
         buttons = ctx.wait_until(rec.find_like_buttons, timeout=8.0, interval=0.25, desc="兴趣圈点赞按钮")
         if not buttons:
             frame = ctx.grab()
@@ -169,7 +180,7 @@ class InterestLikeTask(DailyTask):
             nav.back_to_world(ctx)
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
 
-        
+
         ctx.press("esc")
         returned = bool(ctx.wait_until(
             rec.in_playbook, timeout=4.0, interval=0.35, desc="返回日常任务界面"))
