@@ -20,15 +20,15 @@ class PhotoTask(DailyTask):
         started = time.monotonic()
         if not nav.open_esc_menu(ctx):
             return TaskResult.FAIL
-        
+
         ctx.click(R.PT_ICON_CAMERA)
         if not ctx.wait_until(
                 rec.in_camera, timeout=self.ENTER_CAMERA_TIMEOUT,
                 interval=0.20, desc="进入相机"):
             return TaskResult.FAIL
 
-        
-        
+
+
         for attempt, timeout in enumerate(self.SHARE_WAIT_S, start=1):
             if ctx.should_stop():
                 return TaskResult.ABORT
