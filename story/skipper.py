@@ -20,9 +20,9 @@ from daily.tasks.monthly_card import (CLICK_POINT as MONTHLY_CLICK_POINT,  # noq
                                       MonthlyCardWatcher)
 from runtime_guard import dev_log, release_known_keys, safe_click_norm, safe_press_key  # noqa: E402
 
-NEUTRAL_PT = (0.5, 0.92)       
-                               
-                               
+NEUTRAL_PT = (0.5, 0.92)
+
+
 _PERF_LOG_INTERVAL = 10.0
 
 
@@ -196,8 +196,8 @@ class _PostEscGuard:
         if not self.locked:
             return
         if state == "idle":
-            
-            
+
+
             if self.recovery_sent:
                 self.idle_since = None
                 return
@@ -226,9 +226,9 @@ class _PostEscGuard:
 
 
 _POST_ESC_ROIS = (
-    DAILY_R.ROI_ESC_GRID,       
-    (0.69, 0.01, 1.00, 0.97),  
-    (0.00, 0.81, 0.31, 1.00),  
+    DAILY_R.ROI_ESC_GRID,
+    (0.69, 0.01, 1.00, 0.97),
+    (0.00, 0.81, 0.31, 1.00),
 )
 
 
@@ -242,21 +242,21 @@ def _post_esc_state(frame) -> str:
 
 
 class StorySkipper:
-    TICK = 0.04             
-    TICK_IDLE = 0.2         
-    IDLE_AFTER = 2.0        
-    CLICK_DELAY = (0.1, 0.3)  
-    CONFIRM_GAP = 0.8       
-    OPT_CHECK = 0.3         
-    OPT_CHECK_NONE = 4.0    
-    BAR_WAKE_GAP = 0.5      
-    BAR_WAKE_CHANGE = 3.0   
-    CONFIRM_SCAN_IDLE = 1.0 
-    SKIP_HOLD = 1.0         
-    ESC_PENDING_S = 1.3     
-    POST_SKIP_BLOCK = 1.2   
-    ABORT_BLOCK = 2.0       
-    DEBUG_FLUSH_INTERVAL = 5.0  
+    TICK = 0.04
+    TICK_IDLE = 0.2
+    IDLE_AFTER = 2.0
+    CLICK_DELAY = (0.1, 0.3)
+    CONFIRM_GAP = 0.8
+    OPT_CHECK = 0.3
+    OPT_CHECK_NONE = 4.0
+    BAR_WAKE_GAP = 0.5
+    BAR_WAKE_CHANGE = 3.0
+    CONFIRM_SCAN_IDLE = 1.0
+    SKIP_HOLD = 1.0
+    ESC_PENDING_S = 1.3
+    POST_SKIP_BLOCK = 1.2
+    ABORT_BLOCK = 2.0
+    DEBUG_FLUSH_INTERVAL = 5.0
     VK_ESC = 0x1B
 
     def __init__(self, log=print, on_count=lambda n: None, on_foreground=lambda active: None) -> None:
@@ -292,8 +292,8 @@ class StorySkipper:
     def _foreground(self) -> bool:
         return bool(self._hwnd and is_foreground(self._hwnd))
 
-    def run(self, nudge: bool = False, monthly_card: bool = False) -> None:  
-        
+    def run(self, nudge: bool = False, monthly_card: bool = False) -> None:
+
         if self.stop_flag:
             return
         self.skipped = 0
@@ -319,18 +319,18 @@ class StorySkipper:
         esc_t = 0.0
         block_esc_until = 0.0
         last_skip = 0.0
-        last_skip_seen = -99.0            
+        last_skip_seen = -99.0
         next_advance = 0.0
-        last_confirm_check = 0.0          
-        last_confirm_capture = -99.0      
-        bar_state = "none"                
-        bar_none_streak = 0               
-        opt_mode, opt_pt = "none", None   
+        last_confirm_check = 0.0
+        last_confirm_capture = -99.0
+        bar_state = "none"
+        bar_none_streak = 0
+        opt_mode, opt_pt = "none", None
         last_dbg = ""
         last_log = ""
-        last_foreground = None             
-        gone_since = 0.0                   
-        
+        last_foreground = None
+        gone_since = 0.0
+
         last_active = time.time() - self.IDLE_AFTER
         perf = _PerfStats()
         bar_schedule = _BarOcrSchedule(
@@ -338,8 +338,8 @@ class StorySkipper:
         post_esc_guard = _PostEscGuard()
         try:
             base_rois = [REGION_TR]
-            
-            
+
+
             with subscribe_capture(hwnd, "story", base_rois, self.TICK_IDLE) as frames:
                 self.log("实时检测已就绪")
                 while not self.stop_flag:
@@ -352,9 +352,9 @@ class StorySkipper:
                             self.log("⏸ 游戏不在最前台 → 已暂停")
                         elif previous is False:
                             self.log("游戏已回到前台 → 自动继续")
-                    if self.paused or not foreground:   
+                    if self.paused or not foreground:
                         frames.set_enabled(False)
-                        
+
                         if not self.paused and find_game_hwnd() is None:
                             if not gone_since:
                                 gone_since = time.time()
@@ -385,8 +385,8 @@ class StorySkipper:
                     if confirm_capture_due:
                         last_confirm_capture = request_now
                     now = time.time()
-                    
-                    
+
+
                     if monthly_due:
                         monthly_started = time.perf_counter()
                         monthly_state, hud_hits = monthly.classify(f)
@@ -404,8 +404,8 @@ class StorySkipper:
                             self.log("每日奖励检测结束")
 
                     classify_started = time.perf_counter()
-                    
-                    
+
+
                     state, pt = self.rec.classify(
                         f, check_confirm=confirm_capture_due)
                     perf.add_classify(time.perf_counter() - classify_started)
@@ -413,14 +413,14 @@ class StorySkipper:
                         self._dbg(dbg, now, state)
                         last_dbg = state
                     if state != "gate":
-                        bar_state, opt_mode, opt_pt = "none", "none", None   
+                        bar_state, opt_mode, opt_pt = "none", "none", None
                         bar_schedule.note_non_gate()
-                        
-                        
+
+
                         if state == "confirm":
                             bar_none_streak = 0
                             bar_schedule.reset_negative()
-                    
+
                     if esc_pending and now - esc_t > self.ESC_PENDING_S:
                         esc_pending = False
                         block_esc_until = now + self.ABORT_BLOCK
@@ -428,7 +428,7 @@ class StorySkipper:
                         self._dbg(dbg, now, ">> ESC 后未见确认框(超时放弃)")
                         self.log("ESC 后未见确认框,暂停(剧情可能已结束)")
 
-                    
+
                     bar_signature = None
                     bar_due = False
                     if state == "gate":
@@ -440,7 +440,7 @@ class StorySkipper:
                     if state == "gate" and bar_due:
                         prev_bar = bar_state
                         bar_started = time.perf_counter()
-                        bar_state = self.rec.read_bar(f)          
+                        bar_state = self.rec.read_bar(f)
                         perf.add_slow("bar", time.perf_counter() - bar_started)
                         if bar_state == "none" and bar_signature is None:
                             bar_signature = self.rec.bar_visual_signature(f)
@@ -450,11 +450,11 @@ class StorySkipper:
                             last_skip_seen = now
                             self._dbg(dbg, now, ">> read_bar=SKIP")
                         else:
-                            if bar_state != prev_bar:             
-                                self._dbg(dbg, now, f">> read_bar={bar_state}")   
+                            if bar_state != prev_bar:
+                                self._dbg(dbg, now, f">> read_bar={bar_state}")
                             if bar_state == "story":
                                 extra = frames.get_frame(self.TICK, capture_rois + [REGION_OPT], timeout=0.6)
-                                fo = extra.frame if extra else None       
+                                fo = extra.frame if extra else None
                                 if fo is not None:
                                     options_started = time.perf_counter()
                                     opt_mode, opt_pt = self.rec.read_options(fo)
@@ -462,8 +462,8 @@ class StorySkipper:
                     skip_active = now - last_skip_seen < self.SKIP_HOLD
                     post_esc_guard.observe_story_state(now, state, bar_state)
 
-                    
-                    
+
+
                     if post_esc_scan_due:
                         recovery_started = time.perf_counter()
                         post_esc_state = _post_esc_state(f)
@@ -473,27 +473,27 @@ class StorySkipper:
                             self._dbg(dbg, now, f">> RECOVER ESC menu sent={sent}")
                             if sent:
                                 self.log("检测到多按 ESC 打开菜单 → 补按一次返回角色界面")
-                            
+
                             perf.maybe_log()
                             continue
-                    
-                    
+
+
                     if state == "confirm" or esc_pending or skip_active or (state == "gate" and bar_state != "none"):
                         last_active = now
 
                     if state == "confirm":
-                        
-                        
+
+
                         if pt and now - last_confirm_check >= 0.4:
                             last_confirm_check = now
                             extra = frames.get_frame(self.TICK, capture_rois + [REGION_DLG_TITLE], timeout=0.6)
-                            ft = extra.frame if extra else None             
+                            ft = extra.frame if extra else None
                             dialog_started = time.perf_counter()
                             isd = self.rec.is_skip_dialog(ft if ft is not None else f)
                             perf.add_slow("dialog", time.perf_counter() - dialog_started)
                             self._dbg(dbg, now, f">> CONFIRM态 is_skip_dialog={isd} gap_ok={now-last_skip>self.CONFIRM_GAP}")
                             if now - last_skip > self.CONFIRM_GAP and isd:
-                                time.sleep(random.uniform(*self.CLICK_DELAY))   
+                                time.sleep(random.uniform(*self.CLICK_DELAY))
                                 if self._click_norm(hwnd, pt):
                                     self.skipped += 1
                                     self.on_count(self.skipped)
@@ -506,11 +506,11 @@ class StorySkipper:
                                     time.sleep(0.3)
 
                     elif state == "idle":
-                        pass   
+                        pass
 
                     elif skip_active:
-                        
-                        
+
+
                         if (not esc_pending and now > block_esc_until
                                 and post_esc_guard.allow_primary_esc(
                                     fresh_skip=(bar_state == "skip"))):
@@ -522,7 +522,7 @@ class StorySkipper:
                                 post_esc_guard.primary_sent(now)
 
                     elif bar_state == "story":
-                        
+
                         if opt_mode == "hold":
                             if last_log != "hold":
                                 self.log("对话选项含「再见/退出」→ 交给你手动选择,脚本不点")
@@ -531,14 +531,14 @@ class StorySkipper:
                         elif now >= next_advance:
                             target = opt_pt if (opt_mode == "choice" and opt_pt) else NEUTRAL_PT
                             if self._click_norm(hwnd, target):
-                                next_advance = now + random.uniform(*self.CLICK_DELAY)   
+                                next_advance = now + random.uniform(*self.CLICK_DELAY)
                                 tag = "对话选项 → 点第一项" if opt_mode == "choice" else "不可跳过剧情 → 点击推进"
                                 if last_log != tag:
                                     self.log(tag)
                                     last_log = tag
 
-                    
-                    
+
+
                     perf.maybe_log()
         finally:
             monthly.close()
@@ -546,7 +546,7 @@ class StorySkipper:
             self._close_debug(dbg)
         self.log(f"实时检测结束,共跳过 {self.skipped} 段")
 
-    
+
     def _open_debug(self):
         if getattr(sys, "frozen", False):
             return None
