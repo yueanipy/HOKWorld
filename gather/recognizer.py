@@ -28,20 +28,20 @@ def _res(*parts) -> Path:
         return HERE.parent.joinpath(*parts)
 
 
-TPL = _res("fishing", "templates", "raw")   
+TPL = _res("fishing", "templates", "raw")
 
-ROI_KC = (0.54, 0.46, 0.63, 0.63)     
-ROI_ICON = (0.58, 0.46, 0.67, 0.63)   
-ROI_TEXT = (0.53, 0.45, 0.82, 0.63)   
+ROI_KC = (0.54, 0.46, 0.63, 0.63)
+ROI_ICON = (0.58, 0.46, 0.67, 0.63)
+ROI_TEXT = (0.53, 0.45, 0.82, 0.63)
 
 
 GATHER_REGION = (0.47, 0.39, 0.87, 0.71)
 
 
 GATHER_FAST_REGION = (0.52, 0.43, 0.70, 0.67)
-PICK_F_TH = 0.80                       
-ICON_TH = 0.72                         
-CX_TH = 0.68                           
+PICK_F_TH = 0.80
+ICON_TH = 0.72
+CX_TH = 0.68
 MIN_CONF = 0.45
 
 
@@ -57,14 +57,14 @@ _ICONS = ("pick_f.png", "icon_pick.png", "icon_chongxian.png")
 def _user_dir() -> Path:
     '名单/配置所在的用户可写目录(%LOCALAPPDATA%\\<应用>)。'
     try:
-        from paths import user_data_dir          
+        from paths import user_data_dir
         return user_data_dir()
     except ModuleNotFoundError:
         pass
     except Exception as exc:
         dev_log("paths.user_data_dir 不可用", exc)
     try:
-        from config import user_data_dir          
+        from config import user_data_dir
         return user_data_dir()
     except Exception as exc:
         dev_log("config.user_data_dir 不可用,退回 gather 目录", exc)
@@ -76,7 +76,7 @@ def _list_file(name: str) -> Path:
     user = _user_dir() / name
     if not user.exists():
         try:
-            tpl = _res("gather", name)          
+            tpl = _res("gather", name)
             atomic_write_text(user, tpl.read_text(encoding="utf-8") if tpl.exists() else "", encoding="utf-8")
         except Exception as exc:
             dev_log(f"名单初始化失败: {user}", exc)
@@ -114,8 +114,8 @@ class GatherRecognizer:
 
     def __init__(self) -> None:
         self.bank = TemplateBank(TPL)
-        self.blacklist = _load_list("blacklist.txt", _SEED_BLACKLIST)   
-        self.whitelist = _load_list("whitelist.txt")                     
+        self.blacklist = _load_list("blacklist.txt", _SEED_BLACKLIST)
+        self.whitelist = _load_list("whitelist.txt")
         self.ready = all((TPL / f).exists() for f in _ICONS)
         if self.ready:
             self.bank.register("pick_f", "pick_f.png", ROI_KC, PICK_F_TH, pre="gray", scales=FAST_SCALES)
@@ -172,7 +172,7 @@ class GatherRecognizer:
         '在已预处理的当前激活提示图标框内匹配模板。'
         return match_prepared_scales(preprocessed, self.bank._t[name].prepared)
 
-    
+
     def classify(self, frame: np.ndarray):
         '快路(无 OCR,~3ms):F 键帽锚定 + 图标分类。'
         if not self.ready:
@@ -181,8 +181,8 @@ class GatherRecognizer:
         sc, kx, ky, kw, kh = self._locate_kc(f)
         if sc < PICK_F_TH:
             return ("none", f)
-        
-        
+
+
         h, w = f.shape[:2]
         pad = max(2, int(kh * 0.3))
         box = (int(ROI_ICON[0] * w), ky - pad, int(ROI_ICON[2] * w), ky + kh + pad)
@@ -212,13 +212,13 @@ class GatherRecognizer:
             return (True, "重现", "chongxian")
         if kind == "pick":
             if not name:
-                return (False, "", "no-text")         
-                
+                return (False, "", "no-text")
+
             for b in self.blacklist:
                 if b in name:
                     return (False, name, f"skip:{b}")
             return (True, name, "pick")
-        return (False, name, "other-icon")           
+        return (False, name, "other-icon")
 
     def decide(self, frame: np.ndarray) -> tuple[bool, str, str]:
         '整合一步(诊断/自测用):classify → 必要时 OCR → judge。'
@@ -228,5 +228,5 @@ class GatherRecognizer:
         if kind == "none":
             return (False, "", "no-prompt")
         if kind == "chongxian" and not self.whitelist:
-            return (True, "重现", "chongxian")        
+            return (True, "重现", "chongxian")
         return self.judge(kind, self.read_name(f))
