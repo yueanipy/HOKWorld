@@ -19,27 +19,28 @@ class AlchemyTask(GloryTowerRouteTask):
     TARGET_COUNT = 3
     MAX_RECIPE_SCROLLS = 10
     MAX_CRAFT_ROUNDS = 8
+    RECIPE_SCROLL_SETTLE_S = 1.0
 
     route = TowerRouteSpec(
         target_word="制药",
-        
-        
+
+
         turn_total_px=1000,
         coarse_pulses=8,
         recovery_side="a",
         fine_pulses=5,
         continuous_stop_word="制药",
-        
+
         continuous_walk_timeout_s=4.0,
         turn_landmark_word="荣耀塔",
         post_landmark_turn_px=0,
         turn_landmark_timeout_s=2.0,
-        
-        
-        
-        
-        
-        
+
+
+
+
+
+
         telescope_turn_step_px=150,
         telescope_turn_max_px=900,
         telescope_turn_stages_px=(400, 200, 150, 150),
@@ -76,21 +77,55 @@ class AlchemyTask(GloryTowerRouteTask):
         '点击 OCR 配方行，并要求右侧选中标题确实切换到该物品。'
         ctx = self.ctx
         name = str(row["name"])
-        if not ctx.click(row["point"]):
-            return False
+        current_row = row
+        for attempt in range(2):
+            if attempt:
 
-        def selected(frame):
-            return self._same_recipe(name, rec.alchemy_selected_name(frame))
+                ctx.sleep(self.RECIPE_SCROLL_SETTLE_S)
+                refreshed = self._refresh_visible_recipe_row(row)
+                if refreshed is None or not refreshed["available"]:
+                    break
+                current_row = refreshed
+                self._dev_log(
+                    f"{self.RECIPE_LABEL}“{name}”首次未选中，"
+                    f"按稳定坐标补试 point={current_row['point']}")
+            if not ctx.click(current_row["point"]):
+                return False
 
-        if not ctx.wait_until(selected, timeout=2.5, interval=0.18,
-                              desc=f"选择药方 {name}"):
-            ctx.log(f"{self.CRAFT_LABEL}:点击“{name}”后右侧标题没有切换，按不可用处理")
-            return False
-        frame = ctx.grab()
-        if frame is None or not rec.alchemy_can_craft(frame):
-            ctx.log(f"{self.CRAFT_LABEL}:“{name}”右侧素材不足或制作控件不可用")
-            return False
-        return True
+            def selected(frame):
+                return self._same_recipe(name, rec.alchemy_selected_name(frame))
+
+            if not ctx.wait_until(selected, timeout=2.5, interval=0.18,
+                                  desc=f"选择药方 {name}"):
+                continue
+            frame = ctx.grab()
+            if frame is None or not rec.alchemy_can_craft(frame):
+                ctx.log(f"{self.CRAFT_LABEL}:“{name}”右侧素材不足或制作控件不可用")
+                return False
+            return True
+        ctx.log(f"{self.CRAFT_LABEL}:两次点击“{name}”后右侧标题仍未切换，按不可用处理")
+        return False
+
+    def _refresh_visible_recipe_row(self, previous: dict) -> dict | None:
+        '点击前用新帧重新定位同一配方，避免使用滚动动画中的旧坐标。'
+        frame = self.ctx.grab()
+        if frame is None or not self._in_craft_page(frame):
+            return None
+        rows = rec.alchemy_recipe_rows(frame)
+        name = str(previous["name"])
+        exact = [row for row in rows if str(row["name"]) == name]
+        if exact:
+            matches = exact
+        else:
+            matches = [
+                row for row in rows
+                if self._same_recipe(name, str(row["name"]))
+            ]
+        if not matches:
+            self._dev_log(f"{self.RECIPE_LABEL}“{name}”点击前已不在当前稳定画面")
+            return None
+        old_y = float(previous["point"][1])
+        return min(matches, key=lambda row: abs(float(row["point"][1]) - old_y))
 
     def _find_craftable_recipe(self, blocked: set[str]) -> str | None:
         '优先当前药方；否则扫描可见行，再有界上下翻页查找。'
@@ -104,7 +139,7 @@ class AlchemyTask(GloryTowerRouteTask):
             ctx.log(f"{self.CRAFT_LABEL}:继续使用当前可制作{self.RECIPE_LABEL}“{selected}”")
             return selected
 
-        
+
         directions = (
             (R.PT_ALCHEMY_LIST_DRAG_BOTTOM, R.PT_ALCHEMY_LIST_DRAG_TOP, "向后"),
             (R.PT_ALCHEMY_LIST_DRAG_TOP, R.PT_ALCHEMY_LIST_DRAG_BOTTOM, "向前"),
@@ -129,9 +164,24 @@ class AlchemyTask(GloryTowerRouteTask):
                     name = str(row["name"])
                     if not row["available"] or name in blocked or name in attempted:
                         continue
+                    current_row = self._refresh_visible_recipe_row(row)
+                    if current_row is None:
+
+                        continue
+                    if not current_row["available"]:
+                        self._dev_log(
+                            f"{self.RECIPE_LABEL}“{name}”点击前复核为不可用 "
+                            f"locked={current_row['locked']} "
+                            f"insufficient={current_row['insufficient']}")
+                        blocked.add(name)
+                        continue
                     attempted.add(name)
+                    point = current_row["point"]
+                    self._dev_log(
+                        f"点击稳定{self.RECIPE_LABEL} name={name!r} "
+                        f"point=({point[0]:.4f},{point[1]:.4f})")
                     ctx.log(f"{self.CRAFT_LABEL}:尝试可制作{self.RECIPE_LABEL}“{name}”")
-                    if self._select_recipe(row):
+                    if self._select_recipe(current_row):
                         return name
                     blocked.add(name)
 
@@ -144,22 +194,29 @@ class AlchemyTask(GloryTowerRouteTask):
                     break
                 if not ctx.drag(start, end, duration_s=0.45):
                     return None
-                ctx.sleep(0.30)
+
+                ctx.sleep(self.RECIPE_SCROLL_SETTLE_S)
         return None
 
-    def _read_quantity(self, retries: int = 3) -> int | None:
+    def _read_quantity(self, retries: int = 6) -> int | None:
+        '连续两帧一致才返回数量，忽略加减动画中的瞬时数字。'
         ctx = self.ctx
+        previous = None
+        stable = 0
         for attempt in range(retries):
             frame = ctx.grab()
             quantity = rec.alchemy_quantity(frame) if frame is not None else None
             if quantity is not None:
-                return quantity
+                stable = stable + 1 if quantity == previous else 1
+                previous = quantity
+                if stable >= 2:
+                    return quantity
             if attempt + 1 < retries:
-                ctx.sleep(0.12)
+                ctx.sleep(0.16)
         return None
 
     def _change_quantity_once(self, current: int, increase: bool) -> int | None:
-        '点击一次加减号，并以数字图像变化确认游戏实际接受了点击。'
+        '单次调整数量；未变化时最多允许一次有视觉依据的重试。'
         ctx = self.ctx
         point = R.PT_ALCHEMY_PLUS if increase else R.PT_ALCHEMY_MINUS
         expected = current + 1 if increase else current - 1
@@ -167,17 +224,18 @@ class AlchemyTask(GloryTowerRouteTask):
             if not ctx.click(point):
                 return None
 
-            def changed(frame):
-                quantity = rec.alchemy_quantity(frame)
-                return quantity if quantity != current else None
-
-            changed_to = ctx.wait_until(changed, timeout=1.0, interval=0.12,
-                                        desc=f"调整{self.CRAFT_LABEL}数量")
-            if changed_to is not None:
+            ctx.sleep(0.34)
+            changed_to = self._read_quantity(retries=6)
+            if changed_to is not None and changed_to != current:
                 value = int(changed_to)
                 self._dev_log(f"数量调整 {'+' if increase else '-'} "
                               f"attempt={attempt + 1} {current}->{value} expected={expected}")
                 return value
+            if attempt == 0:
+                self._dev_log(
+                    f"数量调整 {'+' if increase else '-'} 后稳定值未变化，"
+                    "等待后仅重试一次")
+                ctx.sleep(0.30)
         return current
 
     def _set_and_confirm_quantity(self, target: int) -> int | None:
@@ -192,20 +250,29 @@ class AlchemyTask(GloryTowerRouteTask):
         for _ in range(6):
             if current == target:
                 break
-            next_value = self._change_quantity_once(current, increase=current < target)
+            increase = current < target
+            next_value = self._change_quantity_once(current, increase=increase)
             if next_value is None or next_value == current:
                 break
             current = next_value
+            if increase and current > target:
 
-        
+
+                restored = self._change_quantity_once(current, increase=False)
+                if restored is None:
+                    return None
+                current = restored
+                break
+
+
         confirmed: list[int] = []
         for index in range(2):
-            quantity = self._read_quantity(retries=2)
+            quantity = self._read_quantity(retries=6)
             if quantity is None:
                 return None
             confirmed.append(quantity)
             if index == 0:
-                ctx.sleep(0.12)
+                ctx.sleep(0.30)
         if confirmed[0] != confirmed[1]:
             ctx.log(f"{self.CRAFT_LABEL}:制作数量识别不稳定 {confirmed}，本轮不制作")
             return None
@@ -223,6 +290,9 @@ class AlchemyTask(GloryTowerRouteTask):
         if quantity is None:
             return 0
 
+
+        ctx.sleep(0.35)
+        final_quantity = self._read_quantity(retries=6)
         frame = ctx.grab()
         if frame is None:
             return 0
@@ -231,14 +301,14 @@ class AlchemyTask(GloryTowerRouteTask):
             ctx.log(f"{self.CRAFT_LABEL}:制作前{self.RECIPE_LABEL}发生变化 "
                     f"{recipe!r}->{selected!r}，取消点击")
             return 0
-        if rec.alchemy_quantity(frame) != quantity or not rec.alchemy_can_craft(frame):
+        if final_quantity != quantity or not rec.alchemy_can_craft(frame):
             ctx.log(f"{self.CRAFT_LABEL}:制作前数量或素材二次确认失败，取消点击")
             return 0
         button = rec.alchemy_craft_button(frame) or R.PT_ALCHEMY_CRAFT
         if not ctx.click(button):
             return 0
 
-        
+
         ctx.sleep(3.0)
         completed = ctx.wait_until(rec.alchemy_complete_overlay, timeout=6.0, interval=0.25,
                                    desc="确认制作完成")
@@ -246,7 +316,7 @@ class AlchemyTask(GloryTowerRouteTask):
             ctx.log(f"{self.CRAFT_LABEL}:“{recipe}”未识别到制作完成，本轮不计数")
             return 0
 
-        
+
         ctx.log(f"{self.CRAFT_LABEL}:“{recipe}”制作完成，确认增加 {quantity}，等待关闭结果浮层")
         page_returned = False
         for _ in range(2):
@@ -257,7 +327,7 @@ class AlchemyTask(GloryTowerRouteTask):
                 page_returned = True
                 break
         if not page_returned:
-            
+
             ctx.log(f"{self.CRAFT_LABEL}:制作数量已计入，但关闭完成浮层后没有确认回到页面")
         return quantity
 
@@ -328,7 +398,7 @@ class AlchemyTask(GloryTowerRouteTask):
     def _confirm_open_after_arrival(self) -> bool:
         '确认首次 F 生效；已锁存唯一制作台交互时最多补按两次。'
         ctx = self.ctx
-        total_presses = 1  
+        total_presses = 1
         while total_presses <= 3 and not ctx.should_stop():
             deadline = ctx.logical_time() + 2.4
             last_frame = None
@@ -336,7 +406,7 @@ class AlchemyTask(GloryTowerRouteTask):
             while ctx.logical_time() < deadline and not ctx.should_stop():
                 frame = ctx.grab()
                 last_frame = frame
-                
+
                 if frame is not None and rec.climb_key_visible(frame):
                     self._dev_log("F 后等待页面期间识别到 C，立即执行爬墙纠偏")
                     if not self._recover_climb_overshoot(
@@ -356,8 +426,8 @@ class AlchemyTask(GloryTowerRouteTask):
             if climb_recovered:
                 self._dev_log(f"爬墙纠偏已重新命中{self.CRAFT_LABEL}，准备补按 F")
             else:
-                
-                
+
+
                 self._dev_log(f"第 {total_presses} 次 F 后页面未打开 prompt={prompt!r}")
             ctx.sleep(0.12)
             if not ctx.press("f", hold_s=0.08):
