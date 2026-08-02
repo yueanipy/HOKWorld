@@ -129,8 +129,8 @@ class PlaybookClaimTask(DailyTask):
         claimed_tasks = 0
         claimed_rewards = 0
 
-        
-        
+
+
         if not ctx.click(R.PT_SUBTAB_RECOMMEND):
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
         ctx.sleep(0.55)
@@ -153,12 +153,12 @@ class PlaybookClaimTask(DailyTask):
             ctx.log(f"朝闻道:领取推荐任务 #{claimed_tasks}")
             ctx.sleep(0.65)
 
-        
+
         if claimed_tasks:
             ctx.sleep(0.80)
 
-        
-        
+
+
         for _ in range(12):
             if ctx.should_stop():
                 return TaskResult.ABORT
@@ -177,7 +177,7 @@ class PlaybookClaimTask(DailyTask):
                 return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
             claimed_rewards += 1
             ctx.log(f"朝闻道:点击金色活跃度奖励 #{claimed_rewards}")
-            
+
             shown = ctx.wait_until(rec.reward_overlay, timeout=3.0, interval=0.25,
                                    desc="活跃度获得奖励浮层")
             if shown:
