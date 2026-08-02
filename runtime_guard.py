@@ -1,6 +1,7 @@
 '开发版运行保护:日志、原子写入、安全键鼠动作、任务互斥。'
 from __future__ import annotations
 
+import ctypes
 import heapq
 import json
 import os
@@ -12,6 +13,31 @@ from pathlib import Path
 
 import win32api
 import win32con
+
+
+_ULONG_PTR = (
+    ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8
+    else ctypes.c_ulong)
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouse_data", ctypes.c_ulong),
+        ("flags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("extra_info", _ULONG_PTR),
+    ]
+
+
+class _InputUnion(ctypes.Union):
+    _fields_ = [("mouse", _MouseInput)]
+
+
+class _Input(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [("type", ctypes.c_ulong), ("value", _InputUnion)]
 
 HERE = Path(__file__).resolve().parent
 try:
@@ -134,7 +160,7 @@ def input_allowed() -> bool:
 
 
 def release_known_keys(log=dev_log) -> None:
-    
+
     keys = (
         0x09, 0x1B, 0x20, 0x10, 0x11, 0x12,
         *range(0x30, 0x3A),
@@ -253,7 +279,7 @@ def safe_press_scan_code(
 
 
 class SafeKeyScheduler:
-    '按下键后立即返回，并在独立调度线程中按截止时间释放。'
+    '按下键鼠后立即返回，并在独立调度线程中按截止时间释放。'
 
     def __init__(
         self,
@@ -285,7 +311,30 @@ class SafeKeyScheduler:
     def press_scan_code(self, scan_code: int, hold_s: float) -> bool:
         return self._press(("scan", int(scan_code)), hold_s)
 
-    def _press(self, key: tuple[str, int], hold_s: float) -> bool:
+    def press_mouse(
+        self,
+        button: str,
+        hold_s: float,
+        *,
+        cursor_position: tuple[int, int] | None = None,
+    ) -> bool:
+        '非阻塞按住鼠标键；仅菜单点击需要先定位光标。'
+        codes = {"left": 1, "right": 2, "middle": 3}
+        code = codes.get(str(button).lower())
+        if code is None:
+            return False
+        return self._press(
+            ("mouse", code), hold_s,
+            cursor_position=cursor_position,
+        )
+
+    def _press(
+        self,
+        key: tuple[str, int],
+        hold_s: float,
+        *,
+        cursor_position: tuple[int, int] | None = None,
+    ) -> bool:
         if not _allow(
             self._stop_check,
             self._foreground_check,
@@ -304,6 +353,11 @@ class SafeKeyScheduler:
                             self._log,
                         ):
                             return False
+                        if cursor_position is not None:
+                            win32api.SetCursorPos((
+                                int(cursor_position[0]),
+                                int(cursor_position[1]),
+                            ))
                         self._emit(key, key_up=False)
                 self._held[key] = self._held.get(key, 0) + 1
                 self._sequence += 1
@@ -387,6 +441,25 @@ class SafeKeyScheduler:
     @staticmethod
     def _emit(key: tuple[str, int], *, key_up: bool) -> None:
         kind, code = key
+        if kind == "mouse":
+            flags = {
+                1: (
+                    win32con.MOUSEEVENTF_LEFTDOWN,
+                    win32con.MOUSEEVENTF_LEFTUP,
+                ),
+                2: (
+                    win32con.MOUSEEVENTF_RIGHTDOWN,
+                    win32con.MOUSEEVENTF_RIGHTUP,
+                ),
+                3: (
+                    win32con.MOUSEEVENTF_MIDDLEDOWN,
+                    win32con.MOUSEEVENTF_MIDDLEUP,
+                ),
+            }
+            down_flag, up_flag = flags[int(code)]
+            win32api.mouse_event(
+                up_flag if key_up else down_flag, 0, 0, 0, 0)
+            return
         up_flag = win32con.KEYEVENTF_KEYUP if key_up else 0
         if kind == "scan":
             scan_flag = getattr(win32con, "KEYEVENTF_SCANCODE", 0x0008)
@@ -409,26 +482,37 @@ def safe_mouse_button(button: str, stop_check=None, foreground_check=None,
     if button not in flags:
         raise ValueError(f"不支持的鼠标键: {button}")
     down_flag, up_flag = flags[button]
+    pressed = False
     try:
+        cursor_position = None
+        if hwnd and point is not None:
+            from winenv import client_rect_on_screen
+
+            x, y, width, height = client_rect_on_screen(hwnd)
+            if width <= 0 or height <= 0:
+                return False
+            cursor_position = (
+                int(x + float(point[0]) * width),
+                int(y + float(point[1]) * height),
+            )
         with _INPUT_ACTION_LOCK:
             if not _allow(stop_check, foreground_check, log):
                 return False
-            if hwnd and point is not None:
-                from winenv import client_rect_on_screen
-
-                x, y, width, height = client_rect_on_screen(hwnd)
-                if width <= 0 or height <= 0:
-                    return False
-                win32api.SetCursorPos((
-                    int(x + float(point[0]) * width),
-                    int(y + float(point[1]) * height),
-                ))
+            if cursor_position is not None:
+                win32api.SetCursorPos(cursor_position)
             win32api.mouse_event(down_flag, 0, 0, 0, 0)
-            try:
-                time.sleep(max(0.0, hold_s))
-            finally:
-                win32api.mouse_event(up_flag, 0, 0, 0, 0)
-            return True
+            pressed = True
+        completed = True
+        deadline = time.monotonic() + max(0.0, min(5.0, float(hold_s)))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            if not _allow(stop_check, foreground_check, log):
+                completed = False
+                break
+            time.sleep(min(0.02, remaining))
+        return completed
     except Exception as exc:
         dev_log(f"safe_mouse_button failed button={button}", exc)
         try:
@@ -437,6 +521,13 @@ def safe_mouse_button(button: str, stop_check=None, foreground_check=None,
             pass
         release_known_keys()
         raise
+    finally:
+        if pressed:
+            try:
+                with _INPUT_ACTION_LOCK:
+                    win32api.mouse_event(up_flag, 0, 0, 0, 0)
+            except Exception as exc:
+                dev_log(f"safe_mouse_button release failed button={button}", exc)
 
 
 @contextmanager
@@ -498,6 +589,83 @@ def safe_scroll_norm(hwnd, pt, notches: int, stop_check=None, foreground_check=N
         raise
 
 
+def safe_scroll(
+        notches: int, stop_check=None, foreground_check=None,
+        log=dev_log) -> bool:
+    '在当前 HUD 光标位置发送滚轮，不改变镜头或隐藏光标位置。'
+    if notches == 0 or not _allow(stop_check, foreground_check, log):
+        return False
+    try:
+        with _INPUT_ACTION_LOCK:
+            if not _allow(stop_check, foreground_check, log):
+                return False
+            win32api.mouse_event(
+                win32con.MOUSEEVENTF_WHEEL,
+                0, 0, int(notches) * 120, 0,
+            )
+            return True
+    except Exception as exc:
+        dev_log(f"safe_scroll failed notches={notches}", exc)
+        try:
+            log(f"[保护] 滚轮失败,已急停: {exc}")
+        except Exception:
+            pass
+        release_known_keys()
+        raise
+
+
+def safe_move_mouse_relative(
+        dx: int, dy: int, *, duration_s: float = 0.0,
+        stop_check=None, foreground_check=None, log=dev_log) -> bool:
+    '受保护地发送相对鼠标移动，并在分步期间持续检查停止和前台。'
+    if not _allow(stop_check, foreground_check, log):
+        return False
+    total_x, total_y = int(dx), int(dy)
+    duration = max(0.0, min(5.0, float(duration_s)))
+    steps = max(1, min(120, int(round(duration / 0.01))))
+    moved_x = 0
+    moved_y = 0
+    try:
+        with _INPUT_ACTION_LOCK:
+            for index in range(1, steps + 1):
+                if not _allow(stop_check, foreground_check, log):
+                    return False
+                target_x = int(round(total_x * index / steps))
+                target_y = int(round(total_y * index / steps))
+                step_x = target_x - moved_x
+                step_y = target_y - moved_y
+                if step_x or step_y:
+                    _send_input_mouse_move(step_x, step_y)
+                moved_x, moved_y = target_x, target_y
+                if duration > 0.0 and index < steps:
+                    time.sleep(duration / steps)
+        return True
+    except Exception as exc:
+        dev_log(
+            f"safe_move_mouse_relative failed dx={total_x} dy={total_y}", exc)
+        try:
+            log(f"[保护] 相对鼠标移动失败,已急停: {exc}")
+        except Exception:
+            pass
+        release_known_keys()
+        raise
+
+
+def _send_input_mouse_move(dx: int, dy: int) -> None:
+    '使用SendInput发送一帧相对鼠标增量。'
+    event = _Input(
+        type=0,
+        mouse=_MouseInput(
+            dx=int(dx), dy=int(dy), mouse_data=0,
+            flags=win32con.MOUSEEVENTF_MOVE, time=0, extra_info=0,
+        ),
+    )
+    sent = int(ctypes.windll.user32.SendInput(
+        1, ctypes.byref(event), ctypes.sizeof(_Input)))
+    if sent != 1:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def safe_click_norm(hwnd, pt, stop_check=None, foreground_check=None, log=dev_log, down_s: float = 0.02) -> bool:
     if not _allow(stop_check, foreground_check, log):
         return False
@@ -518,7 +686,7 @@ def safe_click_norm(hwnd, pt, stop_check=None, foreground_check=None, log=dev_lo
             try:
                 time.sleep(max(0.0, down_s))
             finally:
-                
+
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             return True
     except Exception as exc:
@@ -544,24 +712,36 @@ def safe_drag_norm(hwnd, start, end, stop_check=None, foreground_check=None,
             return False
         sx, sy = int(x + start[0] * w), int(y + start[1] * h)
         ex, ey = int(x + end[0] * w), int(y + end[1] * h)
+        pressed = False
         with _INPUT_ACTION_LOCK:
             if not _allow(stop_check, foreground_check, log):
                 return False
             win32api.SetCursorPos((sx, sy))
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            try:
-                count = max(1, int(steps))
-                delay = max(0.0, duration_s) / count
-                for i in range(1, count + 1):
+            pressed = True
+        try:
+            count = max(1, int(steps))
+            delay = max(0.0, min(10.0, float(duration_s))) / count
+            for i in range(1, count + 1):
+                if not _allow(stop_check, foreground_check, log):
+                    return False
+                px = int(sx + (ex - sx) * i / count)
+                py = int(sy + (ey - sy) * i / count)
+                with _INPUT_ACTION_LOCK:
                     if not _allow(stop_check, foreground_check, log):
                         return False
-                    px = int(sx + (ex - sx) * i / count)
-                    py = int(sy + (ey - sy) * i / count)
                     win32api.SetCursorPos((px, py))
-                    time.sleep(delay)
-                return True
-            finally:
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                deadline = time.monotonic() + delay
+                while time.monotonic() < deadline:
+                    if not _allow(stop_check, foreground_check, log):
+                        return False
+                    time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+            return True
+        finally:
+            if pressed:
+                with _INPUT_ACTION_LOCK:
+                    win32api.mouse_event(
+                        win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
     except Exception as exc:
         dev_log(f"safe_drag_norm failed start={start} end={end}", exc)
         try:
