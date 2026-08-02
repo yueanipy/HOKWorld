@@ -4,8 +4,9 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 
-from winenv import find_game_hwnd, is_foreground  
+from winenv import find_game_hwnd, is_foreground
 from capture import GameCapture
 from runtime_guard import (dev_log, input_allowed, release_known_keys, safe_click_norm,
                            safe_drag_norm, safe_hold_key, safe_press_key, safe_scroll_norm)
@@ -16,10 +17,20 @@ VK = {
     "t": 0x54,
     "w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44, "c": 0x43,
     "f7": 0x76,
-    "f11": 0x7A,  
-                  
+    "f11": 0x7A,
+
     "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34, "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
 }
+
+
+@dataclass
+class TaskTimeout:
+    '单个每日任务的局部超时状态，不终止后续任务。'
+
+    deadline: float
+    label: str
+    expired: bool = False
+    logged: bool = False
 
 
 class DailyContext:
@@ -29,6 +40,7 @@ class DailyContext:
         self.stop_reason = ""
         self._stop_deadline = stop_deadline
         self._deadline_logged = False
+        self._task_timeout: TaskTimeout | None = None
         self.paused = False
         self._pause_lock = threading.Lock()
         self._paused_total = 0.0
@@ -38,7 +50,7 @@ class DailyContext:
         self._cap: GameCapture | None = None
         self._hwnd_lock = threading.RLock()
 
-    
+
     def start(self) -> bool:
         hwnd = find_game_hwnd()
         with self._hwnd_lock:
@@ -47,8 +59,8 @@ class DailyContext:
             self.log("未找到游戏窗口『王者荣耀世界』,请先进入游戏")
             return False
         try:
-            
-            
+
+
             import ctypes
             ctypes.windll.winmm.timeBeginPeriod(1)
             self._timer_res = True
@@ -63,7 +75,7 @@ class DailyContext:
         if getattr(self, "_timer_res", False):
             try:
                 import ctypes
-                ctypes.windll.winmm.timeEndPeriod(1)   
+                ctypes.windll.winmm.timeEndPeriod(1)
             except Exception:
                 pass
             self._timer_res = False
@@ -93,6 +105,32 @@ class DailyContext:
         if not self._deadline_logged:
             self._deadline_logged = True
             self.log("本轮任务已到计划截止时间 → 停止旧轮")
+            release_known_keys(self.log)
+        return True
+
+    @contextmanager
+    def task_timeout(self, seconds: float, label: str):
+        '限制当前任务的逻辑运行时间，超时后仅让该任务失败。'
+        previous = self._task_timeout
+        state = TaskTimeout(
+            deadline=self.logical_time() + max(0.0, float(seconds)),
+            label=str(label),
+        )
+        self._task_timeout = state
+        try:
+            yield state
+        finally:
+            self._task_timeout = previous
+
+    def _task_deadline_reached(self) -> bool:
+        state = self._task_timeout
+        if state is None or self.logical_time() < state.deadline:
+            return False
+        state.expired = True
+        if not state.logged:
+            state.logged = True
+            self.log(f"{state.label}:运行达到局部超时上限")
+            dev_log(f"[daily] {state.label} 局部超时")
             release_known_keys(self.log)
         return True
 
@@ -154,10 +192,10 @@ class DailyContext:
         '任务逻辑时钟；暂停期间冻结，供需要视觉闭环的自定义状态机计时。'
         return self._clock()
 
-    
+
     def should_stop(self) -> bool:
         '停止条件:用户停止、计划截止或游戏窗口消失。'
-        if self.stop_flag or self._deadline_reached():
+        if self.stop_flag or self._deadline_reached() or self._task_deadline_reached():
             return True
         if not find_game_hwnd():
             self.log("游戏窗口消失 → 停止一条龙")
@@ -167,7 +205,12 @@ class DailyContext:
         return False
 
     def _stopped(self) -> bool:
-        return bool(self.stop_flag or self.paused or self._deadline_reached())
+        return bool(
+            self.stop_flag
+            or self.paused
+            or self._deadline_reached()
+            or self._task_deadline_reached()
+        )
 
     def foreground(self) -> bool:
         '判断游戏是否在前台，并修正最小化交接期间缓存的旧句柄。'
@@ -229,7 +272,7 @@ class DailyContext:
             return None
         return self.hwnd
 
-    
+
     def grab(self):
         '只在游戏前台抓帧；失焦时冻结当前步骤并等待用户切回。'
         if not self.wait_foreground(timeout=None):
@@ -252,7 +295,7 @@ class DailyContext:
             cap = self._cap
         return None if cap is None else cap.grab()
 
-    
+
     def click(self, pt) -> bool:
         '点归一化坐标(仅前台+未停止时;不走弧线直接点)。'
         if pt is None:
@@ -305,7 +348,7 @@ class DailyContext:
                 return False
             return False
 
-        
+
         remaining = duration
         while remaining > 0.0 and self.wait_foreground(timeout=None):
             segment_started = time.monotonic()
@@ -369,9 +412,9 @@ class DailyContext:
             try:
                 time.sleep(0.15)
             finally:
-                win32api.mouse_event(win32con.MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)  
-            self.sleep(1.6)                   
-                                              
+                win32api.mouse_event(win32con.MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+            self.sleep(1.6)
+
             return True
         except Exception as exc:
             dev_log("center_camera 失败", exc)
@@ -412,7 +455,7 @@ class DailyContext:
             dev_log("drag_camera 失败", exc)
             return False
 
-    
+
     def sleep(self, seconds: float) -> None:
         '可被停止打断、暂停期间不消耗剩余时长的 sleep。'
         deadline = self._clock() + max(0.0, float(seconds))
