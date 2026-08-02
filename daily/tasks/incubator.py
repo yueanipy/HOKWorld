@@ -22,7 +22,7 @@ class IncubatorTask(FieldTask):
     MAX_VISUAL_PLANT_RETRIES = 1
     NODE_PT = R.PT_NODE_INCUBATOR
 
-    
+
     ARRIVE_SEQ = (("drag", -215),)
     FRONT_TURN_PX = 223
     MINI_MAX_APPROACH = 15
@@ -42,8 +42,8 @@ class IncubatorTask(FieldTask):
     REL_RING_SWING_MIN = 9.0
     REL_RING_STD_MIN = 3.0
     ACTION_EVIDENCE_TTL_S = 2.0
-    
-    
+
+
     ACTION_RING_MIN = 700
 
     def __init__(self, ctx) -> None:
@@ -76,7 +76,7 @@ class IncubatorTask(FieldTask):
             state = rec.plot_frame_state(frame, R.ROI_PLOT_FEET_TIGHT) if frame is not None else None
             rechecked = False
             if state is None:
-                
+
                 rechecked = True
                 ctx.sleep(self.FRAME_RECHECK_S)
                 frame = ctx.grab()
@@ -87,7 +87,7 @@ class IncubatorTask(FieldTask):
             if step < self.MINI_MIN_APPROACH or state is None:
                 continue
 
-            
+
             ctx.sleep(self.MINI_RECONFIRM_S)
             confirm = ctx.grab()
             state2 = rec.plot_frame_state(confirm, R.ROI_PLOT_FEET_TIGHT) if confirm is not None else None
@@ -138,7 +138,7 @@ class IncubatorTask(FieldTask):
             self._clear_evidence()
             ctx.tap("a", self.STRAFE_TAP)
             ctx.sleep(self.MINI_SETTLE_S)
-        
+
         self._clear_evidence()
         ctx.tap("a", self.FIRST_COL_NUDGE_S)
         ctx.sleep(self.MINI_SETTLE_S)
@@ -149,8 +149,8 @@ class IncubatorTask(FieldTask):
             self._mark_plot_evidence()
             return True
 
-        
-        
+
+
         ctx.log(f"{self.name}:A 碎步后脚下无框 → 小幅 W 校正第一行第一列")
         for step in range(1, self.FIRST_COL_W_CORRECT_MAX + 1):
             if ctx.should_stop():
@@ -461,17 +461,17 @@ class IncubatorTask(FieldTask):
                 return False
             self._clear_evidence()
             ctx.tap("w", self.MINI_STEP_S)
-            
+
             frame = ctx.grab()
-            
-            
+
+
             tight_state = (rec.plot_frame_state(frame, R.ROI_PLOT_FEET_TIGHT)
                            if frame is not None else None)
             route_present = rec.plot_frame_present(frame) if frame is not None else False
             frame_seen = tight_state is not None or route_present
             rechecked = False
             if not frame_seen:
-                
+
                 rechecked = True
                 ctx.sleep(self.FRAME_RECHECK_S)
                 frame = ctx.grab()
@@ -488,8 +488,8 @@ class IncubatorTask(FieldTask):
                     f" 路线框={route_present} 识别到框={frame_seen}"
                     f" 复查={rechecked} 连续无框={no_frame_steps}/{self.FIELD_EXIT_MISSES}")
 
-            
-            
+
+
             if step >= self.MINI_MIN_STEPS and tight_state is not None:
                 self._mark_plot_evidence()
                 fast_gold = rec.action_ring_gold_px(frame)
@@ -547,8 +547,8 @@ class IncubatorTask(FieldTask):
                             f"{self.name}:第 {row} 行完整闪烁周期未识别到右下角状态"
                             " → 改用慢速 W 碎步继续寻找")
                         break
-                    
-                    
+
+
                     recheck_limit = (self.POST_WATER_RECHECKS if after_water
                                      else self.POST_ACTION_RECHECKS)
                     if did_any and none_waits < recheck_limit:
