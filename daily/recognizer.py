@@ -14,7 +14,7 @@ from fishing.template_bank import crop, normalize
 from daily import regions as R
 from daily.config import DISPATCH_REGIONS
 
-MIN_CONF = 0.5   
+MIN_CONF = 0.5
 
 
 
@@ -74,6 +74,77 @@ def find_word(frame: np.ndarray, roi, word: str):
     return None
 
 
+def _word_center_in_box(text: str, box, word: str):
+    '返回水平文字框内指定短语的估算中心，兼容 OCR 合并多个页签。'
+    compact = "".join(str(text).split())
+    index = compact.find(word)
+    if index < 0 or not compact:
+        return None
+    _text, x0, y0, x1, y1 = box
+    ratio = (index + len(word) * 0.5) / len(compact)
+    return (x0 + (x1 - x0) * ratio, (y0 + y1) * 0.5)
+
+
+def find_residence_manage(frame: np.ndarray):
+    '在居所页上中部返回「管理」页签的实际文字位置。'
+    candidates = []
+    seen = set()
+    search_rois = (
+        R.ROI_RESIDENCE_MANAGE_SEARCH,
+        *R.ROI_RESIDENCE_MANAGE_FALLBACKS,
+    )
+    for roi_index, roi in enumerate(search_rois):
+        for box in ocr_boxes(frame, roi, upscale=1.35):
+            text = "".join(box[0].split())
+            point = _word_center_in_box(text, box, "管理")
+            if point is None:
+                continue
+
+            if not (0.24 <= point[0] <= 0.76 and 0.012 <= point[1] <= 0.085):
+                continue
+            key = (round(point[0], 3), round(point[1], 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            exact_rank = 0 if text == "管理" else 1
+            candidates.append((
+                exact_rank,
+                roi_index,
+                abs(point[1] - 0.04),
+                abs(point[0] - 0.46),
+                point,
+            ))
+    return min(candidates)[-1] if candidates else None
+
+
+def residence_top_ocr_text(frame: np.ndarray) -> str:
+    '返回管理入口搜索区的 OCR 原文，仅供失败诊断。'
+    texts = []
+    seen = set()
+    for roi in (
+            R.ROI_RESIDENCE_MANAGE_SEARCH,
+            *R.ROI_RESIDENCE_MANAGE_FALLBACKS):
+        for text, *_coords in ocr_boxes(frame, roi, upscale=1.35):
+            compact = "".join(str(text).split())
+            if compact and compact not in seen:
+                seen.add(compact)
+                texts.append(compact)
+    return "|".join(texts)
+
+
+def find_interest_popup_close(frame: np.ndarray):
+    '返回兴趣圈下半部浮层「关闭」按钮的实际文字位置。'
+    candidates = []
+    for box in ocr_boxes(frame, R.ROI_IC_POPUP_CLOSE_SEARCH, upscale=1.25):
+        text = "".join(box[0].split())
+        if "关闭" not in text or len(text) > 6:
+            continue
+        point = _word_center_in_box(text, box, "关闭")
+        if point is not None:
+            candidates.append((0 if text == "关闭" else 1, abs(point[0] - 0.5), point))
+    return min(candidates)[-1] if candidates else None
+
+
 def interest_badge_popup(frame: np.ndarray) -> bool:
     '识别兴趣圈内遮挡点赞按钮的徽章升级奖励层。'
     text = ocr_text(frame, (0.24, 0.06, 0.76, 0.94))
@@ -119,7 +190,7 @@ def world_map_text(frame: np.ndarray) -> str:
 
 def in_world_map(frame: np.ndarray) -> bool:
     '是否在可缩放的世界地图。'
-    
+
     text = world_map_text(frame)
     return (("切换地图" in text or "缩放地图" in text) and
             ("返回" in text or "返回所在处" in text))
@@ -224,7 +295,7 @@ def crafting_interaction_state(frame: np.ndarray, target_word: str) -> dict:
         return {"found": False, "stacked_above": False,
                 "target_pt": None, "text": "".join(t for t, _, _ in lines)}
 
-    
+
     _, target_x, target_y = max(targets, key=lambda item: item[2])
     stacked_above = False
     for text, cx, cy in lines:
@@ -255,12 +326,15 @@ def cooking_interaction_state(frame: np.ndarray) -> dict:
 
 
 _ALCHEMY_RECIPE_SKIP = (
-    "药方", "菜谱", "食谱", "烹饪", "素材不足", "恢复生命", "提升震流", "提升疾流", "治疗队友",
-    "获得护盾", "世界探索", "商店", "逸事", "全部类型", "制作数量",
+    "药方", "菜谱", "食谱", "烹饪", "素材不足", "恢复生命", "持续恢复", "立即恢复",
+    "提升", "攻击力", "暴击", "穿透", "防御", "耐力", "追击", "破势", "抗性",
+    "治疗队友", "治疗效果", "获得护盾", "世界探索", "商店", "逸事", "全部类型",
+    "制作数量", "烹饪数量", "可获得",
 )
 _ALCHEMY_UNLOCK_WORDS = ("世界探索", "商店", "逸事", "解锁")
 _ALCHEMY_QTY_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "assets" / "daily"
 _alchemy_qty_templates: dict[int, np.ndarray] | None = None
+_alchemy_lock_template: np.ndarray | None = None
 
 
 def in_crafting_page(frame: np.ndarray, title: str) -> bool:
@@ -268,8 +342,8 @@ def in_crafting_page(frame: np.ndarray, title: str) -> bool:
     header = ocr_text(frame, R.ROI_ALCHEMY_HEADER)
     if title and title in header:
         return True
-    
-    
+
+
     controls = ocr_text(frame, R.ROI_ALCHEMY_CONTROLS)
     return (("制作数量" in controls and "制作" in controls)
             or ("烹饪数量" in controls and "烹饪" in controls))
@@ -295,35 +369,84 @@ def alchemy_selected_name(frame: np.ndarray) -> str:
     return max(candidates, key=len) if candidates else ""
 
 
+def _load_alchemy_lock_template() -> np.ndarray | None:
+    '加载真实制作列表中的小锁二值模板。'
+    global _alchemy_lock_template
+    if _alchemy_lock_template is None:
+        image = cv2.imread(
+            str(_ALCHEMY_QTY_TEMPLATE_DIR / "alchemy_recipe_lock.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        if image is not None:
+            _, image = cv2.threshold(image, 170, 255, cv2.THRESH_BINARY)
+        _alchemy_lock_template = image
+    return _alchemy_lock_template
+
+
 def _alchemy_row_has_lock(normalized: np.ndarray, name_y: float) -> bool:
-    '药名左侧锁图标：低饱和亮白小锁；开放药方相同位置基本无亮白像素。'
+    '先匹配真实小锁模板，再用亮白图形占比作兼容兜底。'
     h, w = normalized.shape[:2]
-    x0, x1 = int(0.058 * w), int(0.068 * w)
-    y0, y1 = int((name_y - 0.018) * h), int((name_y + 0.006) * h)
+    x0, x1 = int(0.052 * w), int(0.078 * w)
+    y0, y1 = int((name_y - 0.030) * h), int((name_y + 0.018) * h)
     y0, y1 = max(0, y0), min(h, y1)
     if x1 <= x0 or y1 <= y0:
         return False
     hsv = cv2.cvtColor(normalized[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
     bright_neutral = (hsv[:, :, 2] >= 170) & (hsv[:, :, 1] <= 85)
-    return float(bright_neutral.mean()) >= 0.18
+    mask = (bright_neutral.astype(np.uint8) * 255)
+    template = _load_alchemy_lock_template()
+    if (
+        template is not None
+        and mask.shape[0] >= template.shape[0]
+        and mask.shape[1] >= template.shape[1]
+    ):
+        score = float(cv2.matchTemplate(
+            mask, template, cv2.TM_CCOEFF_NORMED
+        ).max())
+        if score >= 0.62:
+            return True
+
+
+    fx0, fx1 = int(0.058 * w), int(0.068 * w)
+    fy0, fy1 = int((name_y - 0.018) * h), int((name_y + 0.006) * h)
+    fy0, fy1 = max(0, fy0), min(h, fy1)
+    fallback = bright_neutral[
+        max(0, fy0 - y0):max(0, fy1 - y0),
+        max(0, fx0 - x0):max(0, fx1 - x0),
+    ]
+    return bool(fallback.size and float(fallback.mean()) >= 0.18)
 
 
 def alchemy_recipe_rows(frame: np.ndarray) -> list[dict]:
     '解析当前可见药方行。'
-    lines = ocr_lines(frame, R.ROI_ALCHEMY_LIST)
-    names: list[tuple[str, float, float]] = []
-    for text, cx, cy in lines:
+    boxes = ocr_boxes(frame, R.ROI_ALCHEMY_LIST)
+    lines: list[tuple[str, float, float]] = []
+    candidates: list[tuple[str, float, float]] = []
+    for text, x0, y0, x1, y1 in boxes:
+        cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+        lines.append((text, cx, cy))
         clean = "".join(re.findall(r"[\u4e00-\u9fff]", text))
         if not (2 <= len(clean) <= 10 and 0.065 <= cx <= 0.18):
             continue
         if any(word in clean for word in _ALCHEMY_RECIPE_SKIP):
             continue
-        names.append((clean, cx, cy))
+        candidates.append((clean, cx, cy))
+
+
+
+    names: list[tuple[str, float, float]] = []
+    for item in sorted(candidates, key=lambda value: value[2]):
+        if names and item[2] - names[-1][2] < 0.060:
+            continue
+        names.append(item)
 
     normalized = normalize(frame)
     rows: list[dict] = []
     for name, cx, cy in sorted(names, key=lambda item: item[2]):
-        nearby = [text for text, _, y in lines if cy + 0.002 <= y <= cy + 0.060]
+        nearby = [
+            text for text, _, y in lines
+            if cy - 0.018 <= y <= cy + 0.065
+        ]
         status = "".join(nearby)
         lock_icon = _alchemy_row_has_lock(normalized, cy)
         locked = lock_icon or any(word in status for word in _ALCHEMY_UNLOCK_WORDS)
@@ -460,7 +583,7 @@ def find_map_teleport_icons(frame: np.ndarray, anchor,
     h, w = f.shape[:2]
     mask = cv2.inRange(hsv, np.array([82, 100, 150], np.uint8),
                        np.array([100, 255, 255], np.uint8))
-    
+
     mask[:int(0.10 * h), :] = 0
     mask[int(0.88 * h):, :] = 0
     mask[:, :int(0.04 * w)] = 0
@@ -472,7 +595,7 @@ def find_map_teleport_icons(frame: np.ndarray, anchor,
     found: list[tuple[float, float, float]] = []
     for i in range(1, count):
         x, y, cw, ch, area = (int(v) for v in stats[i])
-        
+
         if not (max(1, int(min_width)) <= cw <= 65 and
                 max(1, int(min_height)) <= ch <= 55 and area >= 45):
             continue
@@ -480,7 +603,7 @@ def find_map_teleport_icons(frame: np.ndarray, anchor,
         if original_pixels < max(1, int(min_original_pixels)):
             continue
         cx = float(centers[i][0] / w)
-        
+
         cy = float(np.clip((y + ch + 4) / h, 0.05, 0.95))
         distance = float(np.hypot(cx - ax, cy - ay))
         if max(0.0, float(min_distance)) <= distance <= max_distance:
@@ -610,11 +733,11 @@ def plant_action_available(frame: np.ndarray) -> bool:
 
 def field_waterable(frame: np.ndarray):
     '田块上方是否有 ⛲ 浇水壶气泡(缺水可浇)。'
-    return None   
+    return None
 
 
 
-_ERODE_K = np.ones((9, 9), np.uint8)   
+_ERODE_K = np.ones((9, 9), np.uint8)
 
 _BLUE_LO = np.array([88, 90, 150], np.uint8)
 _BLUE_HI = np.array([112, 255, 255], np.uint8)
@@ -622,8 +745,8 @@ _BLUE_HI = np.array([112, 255, 255], np.uint8)
 
 def _thin(mask: np.ndarray) -> np.ndarray:
     '细线掩膜:掩膜 − (腐蚀→膨胀外扩的大色块)。'
-    blob = cv2.erode(mask, _ERODE_K)                       
-    blob = cv2.dilate(blob, _ERODE_K, iterations=2)        
+    blob = cv2.erode(mask, _ERODE_K)
+    blob = cv2.dilate(blob, _ERODE_K, iterations=2)
     return cv2.bitwise_and(mask, cv2.bitwise_not(blob))
 
 
@@ -669,17 +792,17 @@ def _ratio(t: np.ndarray) -> float:
     return float(cv2.countNonZero(t)) / float(t.size) if t is not None and t.size else 0.0
 
 
-_WATER_TPL = None            
+_WATER_TPL = None
 _WATER_TPL_SCALES = (1.0, 0.9, 1.1, 0.8, 1.2)
-WATER_ACTION_TH = 0.70       
-WATER_FORBIDDEN_TH = 0.75    
-ACTION_ICON_CHANGE_TH = 0.17 
+WATER_ACTION_TH = 0.70
+WATER_FORBIDDEN_TH = 0.75
+ACTION_ICON_CHANGE_TH = 0.17
 
 
-_GOLD_LO = np.array([18, 120, 150], np.uint8)   
+_GOLD_LO = np.array([18, 120, 150], np.uint8)
 _GOLD_HI = np.array([38, 255, 255], np.uint8)
-ACTION_GOLD_MIN = 600        
-                             
+ACTION_GOLD_MIN = 600
+
 
 
 def action_gold_px(frame: np.ndarray) -> int:
@@ -694,10 +817,10 @@ def action_gold_px(frame: np.ndarray) -> int:
 
 
 
-_RING_C = (0.935, 0.915)      
-_RING_R = (25, 60)            
-ACTION_RING_MIN = 500         
-_RING_MASK = {}               
+_RING_C = (0.935, 0.915)
+_RING_R = (25, 60)
+ACTION_RING_MIN = 500
+_RING_MASK = {}
 
 
 def action_ring_gold_px(frame: np.ndarray) -> int:
@@ -707,7 +830,7 @@ def action_ring_gold_px(frame: np.ndarray) -> int:
     cx, cy, r_out = int(_RING_C[0] * W), int(_RING_C[1] * H), _RING_R[1]
     x0, y0 = max(0, cx - r_out), max(0, cy - r_out)
     x1, y1 = min(W, cx + r_out), min(H, cy + r_out)
-    sub = f[y0:y1, x0:x1]                    
+    sub = f[y0:y1, x0:x1]
     if sub.size == 0:
         return 0
     key = (sub.shape[0], sub.shape[1], cx - x0, cy - y0)
@@ -762,12 +885,12 @@ def action_icon_change_score(before_signature, after_frame: np.ndarray) -> float
     return float(cv2.countNonZero(changed)) / float(changed.size)
 
 
-_HARVEST_TPL = None          
-_WATER_FORBIDDEN_TPL = None  
-HARVEST_ACTION_TH = 0.62     
-                             
-                             
-_ACTION_SCALES = (1.0, 0.9, 1.1, 0.8, 1.2, 0.7, 1.3, 1.4)   
+_HARVEST_TPL = None
+_WATER_FORBIDDEN_TPL = None
+HARVEST_ACTION_TH = 0.62
+
+
+_ACTION_SCALES = (1.0, 0.9, 1.1, 0.8, 1.2, 0.7, 1.3, 1.4)
 
 
 def _load_action_tpl_bgr(fname: str):
@@ -879,11 +1002,11 @@ def plot_frame_state(frame: np.ndarray, roi=None):
     if sub is None or sub.size == 0:
         return None
     hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
-    t_blue, t_red, t_white = _frame_thin_masks(hsv)   
-    
-    
-    
-    
+    t_blue, t_red, t_white = _frame_thin_masks(hsv)
+
+
+
+
     if _ratio(t_blue) > 0.008 and _has_frame_line(t_blue, _MIN_FRAME_LINE_BLUE):
         return "blue"
     if _ratio(t_red) > 0.004 and _has_frame_line(t_red):
@@ -901,11 +1024,11 @@ def plot_frame_point(frame: np.ndarray):
         return None
     hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
     thin = _thin(cv2.inRange(hsv, _BLUE_LO, _BLUE_HI))
-    if float(cv2.countNonZero(thin)) / float(thin.size) <= 0.008:   
+    if float(cv2.countNonZero(thin)) / float(thin.size) <= 0.008:
         return None
     if not _has_frame_line(thin):
-        return None                          
-    link = cv2.dilate(thin, np.ones((15, 15), np.uint8))      
+        return None
+    link = cv2.dilate(thin, np.ones((15, 15), np.uint8))
     n, _labels, stats, _cents = cv2.connectedComponentsWithStats(link)
     if n < 2:
         return None
@@ -915,15 +1038,15 @@ def plot_frame_point(frame: np.ndarray):
     dist = cv2.distanceTransform(cv2.bitwise_not(link), cv2.DIST_L2, 3)
     box = dist[by:by + bh, bx:bx + bw]
     iy, ix = np.unravel_index(int(np.argmax(box)), box.shape)
-    if box[iy, ix] <= 20:                     
+    if box[iy, ix] <= 20:
         return None
-    
-    
-    
+
+
+
     px, py = bx + ix, by + iy
     if px in (0, sub.shape[1] - 1) or py in (0, sub.shape[0] - 1):
-        return None                           
-                                              
+        return None
+
     hits = sum((int(link[:py, px].any()), int(link[py + 1:, px].any()),
                 int(link[py, :px].any()), int(link[py, px + 1:].any())))
     if hits < 2:
@@ -976,10 +1099,10 @@ def ahead_is_soil(frame: np.ndarray):
     return soil >= grass
 
 
-_BOARD_TPL = None            
+_BOARD_TPL = None
 _BOARD_SCALES = (1.2, 1.0, 0.85, 0.72)
-BOARD_TH = 0.80              
-ROI_BOARD = (0.28, 0.22, 0.72, 0.62)   
+BOARD_TH = 0.80
+ROI_BOARD = (0.28, 0.22, 0.72, 0.62)
 
 
 def board_ahead(frame: np.ndarray) -> bool:
@@ -1011,8 +1134,8 @@ def board_ahead(frame: np.ndarray) -> bool:
 
 
 
-_FLOW_L = (0.10, 0.72, 0.34, 0.96)     
-_FLOW_R = (0.66, 0.72, 0.90, 0.96)     
+_FLOW_L = (0.10, 0.72, 0.34, 0.96)
+_FLOW_R = (0.66, 0.72, 0.90, 0.96)
 
 
 def ground_shift_dy(prev_bgr: np.ndarray, cur_bgr: np.ndarray) -> float:
@@ -1088,8 +1211,8 @@ def farm_high_value_warning(frame: np.ndarray):
     no_remind_pt = R.PT_FARM_DONT_REMIND
     for text, cx, cy in lines:
         if "不再提示" in text and len(text) <= 8:
-            
-            
+
+
             no_remind_pt = (max(0.0, cx - 0.047), cy)
             break
     confirm_pt = find_word(frame, R.ROI_DIALOG_BTNS, "确定") or R.PT_DIALOG_CONFIRM
@@ -1254,8 +1377,8 @@ def member_drawer_open(frame: np.ndarray) -> bool:
 
 
 
-_PET_RING_P80_MIN = 110       
-_PET_CHECK_CENTER_MIN = 0.12  
+_PET_RING_P80_MIN = 110
+_PET_CHECK_CENTER_MIN = 0.12
 
 
 def _pet_row_circle_normalized(f: np.ndarray, row_idx: int) -> str:
@@ -1460,7 +1583,7 @@ def _interest_phrase_point(text: str, box) -> tuple[float, float] | None:
 
 def _interest_text(text: str) -> str:
     compact = "".join(text.split()).replace("【", "[").replace("】", "]")
-    
+
     if compact.startswith("["):
         end = compact.find("]")
         if end > 1:
@@ -1508,7 +1631,7 @@ def _find_interest_task_entry_from_boxes(frame: np.ndarray, boxes) -> dict | Non
     if entry is not None:
         return entry
 
-    
+
     for box in boxes:
         normalized = _interest_text(box[0])
         if "浏览1次兴趣圈" in normalized and "拍照" in normalized:
@@ -1516,7 +1639,7 @@ def _find_interest_task_entry_from_boxes(frame: np.ndarray, boxes) -> dict | Non
             if entry is not None:
                 return entry
 
-    
+
     for index, (text, x0, y0, x1, y1) in enumerate(boxes):
         if "兴趣圈" not in text:
             continue
@@ -1741,7 +1864,7 @@ def friend_water_houses(frame: np.ndarray) -> list[dict]:
     hits = []
     for y, x in zip(ys, xs):
         cy = (y0 + y + th * 0.5) / H
-        
+
         name_roi = (0.60, max(0.18, cy - 0.055), 0.84, min(0.98, cy + 0.055))
         lines = ocr_lines(f, name_roi)
         name = lines[0][0] if lines else f"row-{cy:.3f}"
