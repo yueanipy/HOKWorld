@@ -1550,7 +1550,7 @@ class RanchTask(DailyTask):
         if not self._confirm_first_stall_arrival():
             return self._abort_or_fail()
 
-        
+
         if not self._align_first_stall_view():
             return self._abort_or_fail()
         first = self._observe()
