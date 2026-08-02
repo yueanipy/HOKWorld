@@ -8,7 +8,7 @@ from runtime_guard import dev_log
 
 def current_scene(f) -> str:
     '当前界面粗判(供导航/诊断)。'
-    
+
     if rec.teleport_dialog(f)[0]:
         return "dialog"
     if rec.in_share_page(f):
@@ -33,7 +33,7 @@ def current_scene(f) -> str:
         return "residence"
     if rec.in_esc_menu(f):
         return "esc_menu"
-    return "world"
+    return "unknown"
 
 
 def back_to_world(ctx, max_esc: int = 8) -> bool:
@@ -44,20 +44,19 @@ def back_to_world(ctx, max_esc: int = 8) -> bool:
         f = ctx.grab()
         if f is None:
             return False
-        
-        
+
+
         if rec.in_world_hud(f):
             if i:
                 dev_log(f"[daily] back_to_world: 第{i + 1}次快速确认角色 HUD")
             return True
         scene = current_scene(f)
-        if scene == "world":
-            return True
+
         dev_log(f"[daily] back_to_world: 第{i + 1}次 场景={scene} → ESC")
         ctx.press("esc")
         ctx.sleep(0.7)
     dev_log("[daily] back_to_world: 达上限仍未回到世界(界面可能异常)")
-    return True
+    return False
 
 
 def open_esc_menu(ctx, timeout: float = 6.0) -> bool:
@@ -76,21 +75,50 @@ def enter_manage_map(ctx, timeout: float = 12.0) -> bool:
         return True
     if not open_esc_menu(ctx):
         return False
-    
+
     f = ctx.grab()
     tile = (rec.find_tile(f, "居所") if f is not None else None) or R.PT_TILE_RESIDENCE
     ctx.click(tile)
     if not ctx.wait_until(rec.in_residence, timeout=timeout, desc="进入居所页"):
         return False
-    
+
     f = ctx.grab()
     if f is not None and rec.in_manage_map(f):
         return True
-    
-    f = ctx.grab()
-    tab = rec.find_word(f, R.ROI_RESIDENCE_TABS, "管理") if f is not None else None
-    ctx.click(tab or R.PT_TAB_MANAGE)
-    return bool(ctx.wait_until(rec.in_manage_map, timeout=timeout, desc="进入管理地图"))
+
+    for attempt in range(2):
+        tab = ctx.wait_until(
+            rec.find_residence_manage,
+            timeout=min(3.0, timeout),
+            interval=0.20,
+            desc="识别居所管理入口",
+        )
+        if not tab:
+            frame = ctx.grab()
+            try:
+                raw_text = (
+                    rec.residence_top_ocr_text(frame)
+                    if frame is not None else ""
+                )
+            except Exception as exc:
+                dev_log("[daily] 管理入口失败诊断 OCR 异常", exc)
+                raw_text = ""
+            ctx.log(
+                "居所:未识别到上方“管理”入口，不执行固定位置点击;"
+                f"顶部OCR={raw_text!r}")
+            return False
+        ctx.log(f"居所:点击识别到的管理入口({tab[0]:.3f},{tab[1]:.3f})")
+        if not ctx.click(tab):
+            return False
+        if ctx.wait_until(
+                rec.in_manage_map,
+                timeout=max(2.0, timeout * 0.5),
+                interval=0.20,
+                desc="进入管理地图"):
+            return True
+        if attempt == 0:
+            ctx.log("居所:首次点击管理入口未切换，重新识别后再试一次")
+    return False
 
 
 def teleport_via_node(ctx, node_pt, timeout: float = 30.0) -> bool:
@@ -102,8 +130,8 @@ def teleport_via_node(ctx, node_pt, timeout: float = 30.0) -> bool:
     f = ctx.grab()
     confirm_pt = rec.teleport_dialog(f)[2] if f is not None else R.PT_DIALOG_CONFIRM
     ctx.click(confirm_pt or R.PT_DIALOG_CONFIRM)
-    
-    
+
+
     hud_streak = 0
 
     def arrived(frame) -> bool:
