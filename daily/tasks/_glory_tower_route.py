@@ -36,8 +36,8 @@ class TowerRouteSpec:
     telescope_turn_stages_px: tuple[int, ...] = ()
     telescope_move_after_first_stage: bool = False
     telescope_turn_timeout_s: float = 2.0
-    
-    
+
+
     telescope_failure_timeout_s: float = 0.0
     telescope_post_turn_walk_s: float = 0.0
     telescope_recovery_side: str = ""
@@ -231,7 +231,7 @@ class GloryTowerRouteTask(DailyTask):
             remaining -= abs(step)
             ctx.sleep(0.10)
             frame = ctx.grab()
-            
+
             if (not spec.turn_landmark_word and frame is not None
                     and self._target_in_frame(frame)):
                 return self._confirm_target(frame)
@@ -360,7 +360,7 @@ class GloryTowerRouteTask(DailyTask):
         max_turn = sum(abs(dx) for dx in stages)
         turned = 0
 
-        
+
         entry_frame = ctx.grab_nowait()
         entry_state, entry_prompt = self._climb_stage_frame_state(entry_frame, stop_word)
         dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段入口 "
@@ -371,7 +371,7 @@ class GloryTowerRouteTask(DailyTask):
             ctx.log(f"{self.name}:第二阶段入口已识别到“{stop_word}”，立即交互")
             return True
 
-        
+
         first_dx = stages[0]
         first_remaining = abs(first_dx)
         first_sign = 1 if first_dx > 0 else -1
@@ -407,7 +407,7 @@ class GloryTowerRouteTask(DailyTask):
         stage_remaining = abs(stages[stage_index])
         stage_sign = 1 if stages[stage_index] > 0 else -1
 
-        
+
         with ctx.hold("w") as held:
             if not held:
                 return False
@@ -447,7 +447,7 @@ class GloryTowerRouteTask(DailyTask):
                         stage_sign = 1 if stages[stage_index] > 0 else -1
                 time.sleep(0.04)
 
-        
+
         elapsed = max(0.0, ctx.logical_time() - phase_started_at)
         dev_log(f"[glory route] {self.task_id} {stop_word}第二阶段 W 已释放 "
                 f"elapsed={elapsed:.2f}s state={state} turned={turned}/{max_turn}px")
@@ -457,7 +457,7 @@ class GloryTowerRouteTask(DailyTask):
             ctx.log(f"{self.name}:移动中识别到“{stop_word}”，已释放 W 并立即交互")
             return True
 
-        
+
         while not ctx.should_stop() and ctx.action_ready():
             frame = ctx.grab_nowait()
             state, prompt = self._climb_stage_frame_state(frame, stop_word)
@@ -484,7 +484,7 @@ class GloryTowerRouteTask(DailyTask):
         if spec is None:
             return False
 
-        
+
         stages = tuple(int(dx) for dx in spec.telescope_turn_stages_px if int(dx))
         if not stages and spec.telescope_turn_step_px and spec.telescope_turn_max_px:
             step = int(spec.telescope_turn_step_px)
@@ -525,8 +525,8 @@ class GloryTowerRouteTask(DailyTask):
             f"{pre_step_plan}{timing}，最多转向 {max_turn}px 寻找“{stop_word}”"
         )
 
-        
-        
+
+
         for step_index in range(pre_turn_steps):
             if ctx.should_stop() or not ctx.action_ready():
                 ctx.log(f"{self.name}:望远镜后碎步输入条件失效，已停止路线")
@@ -542,7 +542,7 @@ class GloryTowerRouteTask(DailyTask):
             return self._run_climb_aware_second_stage(
                 stop_word, stages, movement_timeout_s, failure_timeout_s)
 
-        
+
         frame = ctx.grab_nowait()
         prompt = self._interaction_text(frame) if frame is not None else ""
         if stop_word in prompt:
@@ -551,9 +551,9 @@ class GloryTowerRouteTask(DailyTask):
                     f"turned=0px prompt={prompt!r}")
             return True
 
-        
-        
-        
+
+
+
         phase_started_at: float | None = None
         walk_deadline: float | None = None
         failure_deadline: float | None = None
@@ -563,8 +563,8 @@ class GloryTowerRouteTask(DailyTask):
             failure_deadline = phase_started_at + failure_timeout_s
         detected = False
         climb_detected = False
-        
-        
+
+
         with ExitStack() as movement_stack:
             w_held = False
             while (stage_index < len(stages)
@@ -598,8 +598,8 @@ class GloryTowerRouteTask(DailyTask):
                             f"walk_budget={movement_timeout_s:.2f}s "
                             f"failure_budget={failure_timeout_s:.2f}s（均从本次 W 按下开始）")
 
-                
-                
+
+
                 while (stage_remaining > 0
                        and (walk_deadline is None or ctx.logical_time() < walk_deadline)
                        and not ctx.should_stop()):
@@ -613,7 +613,7 @@ class GloryTowerRouteTask(DailyTask):
                     turned += abs(chunk)
                     time.sleep(0.04)
 
-                    
+
                     frame = ctx.grab_nowait()
                     prompt = self._interaction_text(frame) if frame is not None else ""
                     mode = "W边走边转" if move_with_w else "原地转向"
@@ -648,8 +648,8 @@ class GloryTowerRouteTask(DailyTask):
                     ctx.log(f"{self.name}:第二阶段输入权限失效，已停止转向")
                     return False
 
-            
-            
+
+
             if (delayed_movement_budget and stage_index >= len(stages) and w_held
                     and walk_deadline is not None):
                 while (ctx.logical_time() < walk_deadline and not ctx.should_stop()
@@ -670,8 +670,8 @@ class GloryTowerRouteTask(DailyTask):
                 dev_log(f"[glory route] {self.task_id} 第二阶段持续 W 预算结束 "
                         f"walk_budget={movement_timeout_s:.2f}s turned={turned}/{max_turn}px")
 
-            
-            
+
+
             post_walk_s = max(0.0, float(spec.telescope_post_turn_walk_s))
             if stage_index >= len(stages) and post_walk_s > 0 and ctx.action_ready():
                 if not w_held:
@@ -707,13 +707,13 @@ class GloryTowerRouteTask(DailyTask):
             f"仍未识别到“{stop_word}”"
         )
 
-        
-        
+
+
         if ctx.should_stop() or not ctx.action_ready():
             return False
 
-        
-        
+
+
         if spec.climb_overshoot_recovery and climb_detected:
             return self._recover_climb_overshoot(stop_word, release_climb=True)
 
@@ -738,7 +738,7 @@ class GloryTowerRouteTask(DailyTask):
                     break
                 time.sleep(0.06)
 
-            
+
             failure_elapsed = min(
                 failure_timeout_s,
                 max(0.0, ctx.logical_time() - phase_started_at),
@@ -750,7 +750,7 @@ class GloryTowerRouteTask(DailyTask):
                     f"walk_elapsed={movement_elapsed:.2f}s "
                     f"failure_elapsed={failure_elapsed:.2f}s "
                     f"c_visible={climb_visible or wait_climb_detected}")
-            
+
             c_detected = bool(wait_climb_detected or climb_visible)
             if c_detected or failure_elapsed >= failure_timeout_s - 0.05:
                 return self._recover_climb_overshoot(
@@ -804,10 +804,10 @@ class GloryTowerRouteTask(DailyTask):
                 ctx.log(f"{self.name}:持续行进时游戏失去前台，已抬起 W 并停止路线")
                 return False
 
-            
+
             frame = ctx.grab_nowait()
-            
-            
+
+
             prompt = rec.telescope_interaction_text(frame) if frame is not None else ""
             if stop_word in prompt:
                 ctx.log(f"{self.name}:识别到“{stop_word}”，停止行进")
@@ -838,7 +838,7 @@ class GloryTowerRouteTask(DailyTask):
                         break
                     time.sleep(0.08)
 
-            
+
             if detected:
                 ctx.log(f"{self.name}:识别到“{stop_word}”，已立即抬起 W")
                 return True
@@ -895,7 +895,7 @@ class GloryTowerRouteTask(DailyTask):
             dev_log(f"[glory route] {self.task_id} 粗步 {index + 1}/{spec.coarse_pulses} "
                     f"motion={motion:.3f} prompt={prompt!r}")
             if stuck >= 2:
-                
+
                 turn = 90 if spec.turn_total_px >= 0 else -90
                 ctx.log(f"{self.name}:连续短步未产生画面位移，小幅调整视角")
                 if not ctx.drag_camera(turn, steps=8):
@@ -909,7 +909,7 @@ class GloryTowerRouteTask(DailyTask):
                     ctx.log(f"{self.name}:识别到制作台附近地标，切换为细步搜索")
                     break
 
-        
+
         if self._scan_target(2.2 if near else 1.2):
             return True
 
@@ -933,7 +933,7 @@ class GloryTowerRouteTask(DailyTask):
             if self._scan_target(0.35):
                 return True
 
-        
+
         for dx in (-150, 300, -150):
             if not ctx.drag_camera(dx, steps=10):
                 return False
@@ -956,10 +956,10 @@ class GloryTowerRouteTask(DailyTask):
             return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
         reached = self.route.continuous_stop_word or self.route.target_word
         if self.route.interact_on_arrival:
-            
+
             if not self._prepare_arrival_interaction():
                 return TaskResult.ABORT if ctx.should_stop() else TaskResult.FAIL
-            
+
             ctx.sleep(0.12)
             dev_log(f"[glory route] {self.task_id} 到达交互点，准备按 F target={reached!r}")
             if not ctx.press("f", hold_s=0.08):
